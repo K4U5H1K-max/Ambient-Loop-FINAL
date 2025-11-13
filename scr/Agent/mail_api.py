@@ -16,14 +16,13 @@ import json
 import pickle
 import logging
 from typing import Dict, List
-
 import requests
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-
-# from pipeline import process_email_through_pipeline
+from graph import graph_app
+from langchain_core.messages import HumanMessage
 import base64
 from email.mime.text import MIMEText
 
@@ -98,43 +97,49 @@ def save_state(state: Dict):
 #         print(json.dumps(payload, ensure_ascii=False))
 def notify_agent(payload: Dict, config: Dict):
     """
-    Instead of just printing metadata, this will run the email through the pipeline
-    and optionally send the generated response to a webhook.
+    Process incoming email through the LangGraph Support Agent and reply if it's a support case.
     """
-    reply_to = None
-    email_text = f"From: {payload.get('from', '')}\nSubject: {payload.get('subject', '')}\n\n{payload.get('body', '') or ''}"
-
     try:
-        # result = process_email_through_pipeline(email_text)
-        result = {}
+        # Build email text
+        email_text = (
+            f"From: {payload.get('from', '')}\n"
+            f"Subject: {payload.get('subject', '')}\n\n"
+            f"{payload.get('body', '') or ''}"
+        )
+
+        # Run through LangGraph workflow
+        final_state = graph_app.invoke({"messages": [HumanMessage(content=email_text)]})
+
+        # Basic logging
         print("\n=== NEW EMAIL PROCESSED ===")
         print(f"From: {payload.get('from')}")
         print(f"Subject: {payload.get('subject')}")
-        print(f"Pipeline Intent: {result.get('intent')}")
-        print(f"Support?: {result.get('is_support')}")
-        print(f"\n--- Generated Response ---\n{result.get('response')}\n")
-        if result.get("is_support"):
-            reply_to = "anikakarampuri.test@gmail.com"   # change to your chosen test receiver
-            subject = f"Re: {payload.get('subject', 'Support Response')}"
-            body = result.get("response", "No response generated.")
-            send_email(get_gmail_service(), reply_to, subject, body)
-        print(f"Email sent successfully to {reply_to}. Message ID: {send_message['id']}")
+        print(f"Support Ticket: {final_state.get('is_support_ticket', False)}")
+        print(f"Problems: {final_state.get('problems', [])}")
+        print(f"Policy: {final_state.get('policy_name', 'N/A')}")
+        print(f"Action: {final_state.get('action_taken', 'N/A')}")
+
+        # Get the last AI response (if any)
+        messages = final_state.get("messages", [])
+        ai_response = getattr(messages[-1], "content", None) if messages else None
+
+        if ai_response:
+            print(f"\n--- AI Response ---\n{ai_response}\n")
+
+            # Send auto-reply only if it's a support ticket
+            if final_state.get("is_support_ticket"):
+                reply_to = payload.get("from") or "anikakarampuri.test@gmail.com"
+                subject = f"Re: {payload.get('subject', 'Support Response')}"
+                send_email(get_gmail_service(), reply_to, subject, ai_response)
+                logging.info(f"✅ Support email sent to {reply_to}")
+            else:
+                logging.info("ℹ️ Not a support ticket — no reply sent")
+
+        return {"status": "processed", "is_support": final_state.get("is_support_ticket", False)}
 
     except Exception as e:
-        logging.error("Pipeline failed: %s", e)
-        result = {"error": str(e)}
-
-    if config.get("notify_via_webhook") and config.get("webhook_url"):
-        try:
-            webhook_payload = {
-                "email_meta": payload,
-                "pipeline_result": result
-            }
-            r = requests.post(config["webhook_url"], json=webhook_payload, timeout=5)
-            r.raise_for_status()
-            logging.info("Notified webhook: %s", config["webhook_url"])
-        except Exception as e:
-            logging.warning("Failed to notify webhook: %s", e)
+        logging.error(f"❌ notify_agent failed: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
 
    
 
