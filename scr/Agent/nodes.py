@@ -331,7 +331,7 @@ def resolve_issue(state: SupportAgentState):
             # Execute the tool
             tool_func = None
             for t in tools:
-                if t.name == tool_name:
+                if t == tool_name:
                     tool_func = t
                     break
             
