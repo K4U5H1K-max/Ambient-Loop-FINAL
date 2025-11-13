@@ -1,0 +1,74 @@
+[
+  {
+    "name": "Damaged Product - In Stock",
+    "description": "Customer received a damaged product that is in stock",
+    "input": {
+      "messages": [
+        {
+          "type": "human",
+          "content": "I received my order #ORD12345 yesterday, but the Premium Wireless Headphones are damaged. The packaging was fine but the headphones are cracked."
+        }
+      ]
+    }
+  },
+  {
+    "name": "Damaged Product - Out of Stock",
+    "description": "Customer received a damaged product that is out of stock",
+    "input": {
+      "messages": [
+        {
+          "type": "human",
+          "content": "I received my order #ORD67890 yesterday, but the Smart Fitness Watch is damaged. It looks like it was dropped during shipping."
+        }
+      ]
+    }
+  },
+  {
+    "name": "Missing Item",
+    "description": "Customer reports a missing item from their order",
+    "input": {
+      "messages": [
+        {
+          "type": "human",
+          "content": "I received my order #ORD12345 but one of the Stainless Steel Water Bottles is missing from the package. I checked the packing slip and it should have been included."
+        }
+      ]
+    }
+  },
+  {
+    "name": "Wrong Item",
+    "description": "Customer received the wrong item",
+    "input": {
+      "messages": [
+        {
+          "type": "human",
+          "content": "I ordered Organic Cotton T-Shirts in my order #ORD54321, but received Wireless Charging Pads instead. The items are completely different from what I ordered."
+        }
+      ]
+    }
+  },
+  {
+    "name": "Late Delivery",
+    "description": "Customer's order is late",
+    "input": {
+      "messages": [
+        {
+          "type": "human",
+          "content": "My order #ORD54321 was supposed to be delivered 10 days ago, but it still hasn't arrived. Can you help me figure out what's going on?"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Defective Product",
+    "description": "Customer received a defective product",
+    "input": {
+      "messages": [
+        {
+          "type": "human",
+          "content": "The Premium Wireless Headphones I received in order #ORD12345 are defective. They don't work at all when I try to use them."
+        }
+      ]
+    }
+  }
+]
