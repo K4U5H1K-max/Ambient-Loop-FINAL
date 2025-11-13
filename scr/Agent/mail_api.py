@@ -23,7 +23,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from pipeline import process_email_through_pipeline
+# from pipeline import process_email_through_pipeline
 import base64
 from email.mime.text import MIMEText
 
@@ -105,7 +105,8 @@ def notify_agent(payload: Dict, config: Dict):
     email_text = f"From: {payload.get('from', '')}\nSubject: {payload.get('subject', '')}\n\n{payload.get('body', '') or ''}"
 
     try:
-        result = process_email_through_pipeline(email_text)
+        # result = process_email_through_pipeline(email_text)
+        result = {}
         print("\n=== NEW EMAIL PROCESSED ===")
         print(f"From: {payload.get('from')}")
         print(f"Subject: {payload.get('subject')}")

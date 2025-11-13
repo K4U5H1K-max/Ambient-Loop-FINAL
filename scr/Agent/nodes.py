@@ -4,15 +4,12 @@ from langchain_core.callbacks import BaseCallbackHandler
 from pydantic import BaseModel, Field
 from state import SupportAgentState
 from tools import check_order_status, track_order, check_stock, initialize_resend, initialize_refund
-from langchain.agents import Tool, initialize_agent, AgentType
+from langchain_core.tools import tool as create_tool
 import json
 from typing import Dict, Any, List, Optional
-from policies import format_policies_for_llm, get_policies_for_problem
-
-
-
-from langgraph.graph import StateGraph, END, START
-
+from database.policies import format_policies_for_llm, get_policies_for_problem
+from dotenv import load_dotenv
+load_dotenv()
 # Custom callback handler to capture agent reasoning
 class ReasoningCaptureHandler(BaseCallbackHandler):
     def __init__(self):
@@ -46,7 +43,107 @@ class PolicySelection(BaseModel):
     application_notes: Optional[str] = Field(description="Specific notes on how to apply this policy to the current situation", default=None)
 
 # Initialize LLM
-llm = ChatOpenAI(model="gpt-4", temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+
+def support_classification(state: SupportAgentState):     
+    issue_text = state.messages[0].content
+    
+    prompt = (
+        """You are a binary classifier. Given a single user message, decide if it is a customer support ticket about orders, shipments, refunds/returns/exchanges, resends/reshipments, stock inquiries, cancellations, payment disputes related to a specific order/product, or any direct request to act on an order (e.g., "check order status", "track order", "initiate refund", "resend item", "check stock", "cancel order", "return item"). 
+
+        Output requirements:
+        - Output exactly one token: either True or False (capitalized).
+        - No extra text, punctuation, explanation, or formatting.
+
+        Definitions of True:
+        - Explicit requests about an order (order IDs, product IDs), shipment tracking, initiating refunds/returns/resends, checking stock for fulfilling an order, cancellations, payment/refund status, or asking the service to perform such actions.
+        - Customer complaints about a specific order that request resolution (e.g., wrong/damaged item, missing items, late delivery).
+
+        Definitions of False:
+        - General questions (account settings, pricing, working hours), feedback/praise, marketing/feature requests, unrelated conversation, or informational queries not asking for action on an order.
+
+        Examples:
+        Input: "What's the status of order 12345?" 
+        Output: True
+
+        Input: "Please initiate a refund for order 98765, product SKU: ABC-1"
+        Output: True
+
+        Input: "My package tracking number 1Z999AA10123456784 shows delayed — please update" 
+        Output: True
+
+        Input: "Is product SKU-432 in stock?" 
+        Output: True
+
+        Input: "I received the wrong item and want to return it" 
+        Output: True
+
+        Input: "How do I reset my password?" 
+        Output: False
+
+        Input: "Do you offer bulk discounts?" 
+        Output: False
+
+        Input: "Feature request: add two-factor auth" 
+        Output: False
+
+        Now classify the following message and output only True or False:
+        <Message to classify>
+        ```You are a binary classifier. Given a single user message, decide if it is a customer support ticket about orders, shipments, refunds/returns/exchanges, resends/reshipments, stock inquiries, cancellations, payment disputes related to a specific order/product, or any direct request to act on an order (e.g., "check order status", "track order", "initiate refund", "resend item", "check stock", "cancel order", "return item"). 
+
+        Output requirements:
+        - Output exactly one token: either True or False (capitalized).
+        - No extra text, punctuation, explanation, or formatting.
+
+        Definitions of True:
+        - Explicit requests about an order (order IDs, product IDs), shipment tracking, initiating refunds/returns/resends, checking stock for fulfilling an order, cancellations, payment/refund status, or asking the service to perform such actions.
+        - Customer complaints about a specific order that request resolution (e.g., wrong/damaged item, missing items, late delivery).
+
+        Definitions of False:
+        - General questions (account settings, pricing, working hours), feedback/praise, marketing/feature requests, unrelated conversation, or informational queries not asking for action on an order.
+
+        Examples:
+        Input: "What's the status of order 12345?" 
+        Output: True
+
+        Input: "Please initiate a refund for order 98765, product SKU: ABC-1"
+        Output: True
+
+        Input: "My package tracking number 1Z999AA10123456784 shows delayed — please update" 
+        Output: True
+
+        Input: "Is product SKU-432 in stock?" 
+        Output: True
+
+        Input: "I received the wrong item and want to return it" 
+        Output: True
+
+        Input: "How do I reset my password?" 
+        Output: False
+
+        Input: "Do you offer bulk discounts?" 
+        Output: False
+
+        Input: "Feature request: add two-factor auth" 
+        Output: False
+
+        Now classify the following message and output only True or False:
+        <Message to classify>""")
+    
+    response = llm.invoke([HumanMessage(content=f"{prompt}\nCustomer issue: {issue_text}")])
+
+    is_ticket = response.content.strip().lower() == ("true" or "yes")
+    
+    # Add classification message to the conversation
+    classification_message = AIMessage(content=f"📁 *Support Ticket Classification*: {'Support Ticket' if is_ticket else 'General Inquiry'}")
+    
+    return {
+        "messages": [*state.messages, classification_message],
+        "is_support_ticket": is_ticket
+    }
+
+
 
 def classify_issue(state: SupportAgentState):
     prompt = (
@@ -171,45 +268,8 @@ def pick_policy(state: SupportAgentState):
     }
 
 def resolve_issue(state: SupportAgentState):
-    tools = [
-        Tool(
-            name="check_order_status", 
-            func=check_order_status, 
-            description="Check order status by order ID. Example: ORD12345"
-        ),
-        Tool(
-            name="track_order", 
-            func=track_order, 
-            description="Track shipment by order ID. Example: ORD12345"
-        ),
-        Tool(
-            name="check_stock", 
-            func=check_stock, 
-            description="Check item stock availability by product ID. Product IDs are P1001 (Premium Wireless Headphones), P1002 (Smart Fitness Watch), P1003 (Organic Cotton T-Shirt), P1004 (Stainless Steel Water Bottle), P1005 (Wireless Charging Pad)."
-        ),
-        Tool(
-            name="initialize_resend", 
-            func=initialize_resend, 
-            description="Resend item to customer. Format: 'ORD12345/P1001' where ORD12345 is the order ID and P1001 is the product ID."
-        ),
-        Tool(
-            name="initialize_refund", 
-            func=initialize_refund, 
-            description="Refund customer for order. Format: 'ORD12345/P1001' where ORD12345 is the order ID and P1001 is the product ID."
-        )
-    ]
-    
     # Create callback handler to capture reasoning
     reasoning_handler = ReasoningCaptureHandler()
-    
-    # Initialize agent with callback handler
-    agent = initialize_agent(
-        tools, 
-        llm, 
-        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, 
-        verbose=True,
-        callbacks=[reasoning_handler]
-    )
 
     issue_text = state.messages[0].content
     policy_info = f"{state.policy_name}: {state.policy_desc}"
@@ -225,6 +285,7 @@ def resolve_issue(state: SupportAgentState):
     - P1005: Wireless Charging Pad ($39.99)
     """
     
+    # Create task description
     task = (
         f"You are a customer support agent handling the following issue:\n"
         f"Customer issue: {issue_text}\n"
@@ -247,55 +308,67 @@ def resolve_issue(state: SupportAgentState):
         f"   - If correct item is in stock, initiate a resend using initialize_resend\n"
         f"   - If correct item is out of stock, initiate a refund using initialize_refund\n"
         f"5. For any other issues: Apply the relevant policy\n\n"
-        f"Use the available tools to investigate and resolve this issue. Explain your reasoning step by step."
+        f"Investigate and resolve this issue step by step."
     )
     
-    result = agent.run(task)
+    # Use LLM with tools directly (compatible approach)
+    tools = [check_order_status, track_order, check_stock, initialize_resend, initialize_refund]
+    llm_with_tools = llm.bind_tools(tools)
     
-    # Get detailed reasoning from callback handler
-    detailed_reasoning = reasoning_handler.get_reasoning()
+    # Get response with tool calls
+    response = llm_with_tools.invoke([HumanMessage(content=task)])
     
-    # Format reasoning for frontend display
-    formatted_reasoning = []
-    
-    # Create messages for each tool call and response
+    # Process tool calls if any
     tool_messages = []
-    for step in detailed_reasoning:
-        # Format step for the detailed reasoning
-        formatted_step = {
-            "thought": step.get("thought", ""),
-            "action": step.get("action", ""),
-            "action_input": step.get("action_input", ""),
-            "result": step.get("tool_output", "")
-        }
-        formatted_reasoning.append(formatted_step)
-        
-        # Add tool thought as AI message
-        if step.get("thought"):
-            tool_messages.append(AIMessage(content=f"🤔 {step.get('thought')}"))
-        
-        # Add tool call as a ToolMessage
-        if step.get("action") and step.get("action_input"):
-            tool_name = step.get("action")
-            tool_input = step.get("action_input")
+    detailed_reasoning = []
+    result_text = ""
+    
+    if hasattr(response, 'tool_calls') and response.tool_calls:
+        for tool_call in response.tool_calls:
+            tool_name = tool_call['name']
+            tool_input = tool_call['args']
             
-            # Create proper tool message with name and input
-            tool_messages.append(ToolMessage(
-                name=tool_name,
-                content=tool_input,
-                tool_call_id=f"call_{len(tool_messages)}"
-            ))
-        
-        # Add tool response as a separate message
-        if step.get("tool_output"):
-            tool_messages.append(AIMessage(
-                content=f"📊 Tool response:\n{step.get('tool_output')}"
-            ))
+            # Execute the tool
+            tool_func = None
+            for t in tools:
+                if t.name == tool_name:
+                    tool_func = t
+                    break
+            
+            if tool_func:
+                # Call the tool
+                tool_result = tool_func.invoke(tool_input)
+                
+                # Record reasoning
+                detailed_reasoning.append({
+                    "thought": f"Calling {tool_name}",
+                    "action": tool_name,
+                    "action_input": str(tool_input),
+                    "result": tool_result
+                })
+                
+                # Add messages
+                tool_messages.append(AIMessage(content=f"🤔 Calling {tool_name} with {tool_input}"))
+                tool_messages.append(ToolMessage(
+                    name=tool_name,
+                    content=str(tool_input),
+                    tool_call_id=tool_call.get('id', f"call_{len(tool_messages)}")
+                ))
+                tool_messages.append(AIMessage(content=f"📊 Tool response:\n{tool_result}"))
+    
+    # Get final response from LLM
+    if response.content:
+        result_text = response.content
+    else:
+        # Ask LLM to summarize based on tool results
+        summary_prompt = f"Based on the investigation, provide a resolution for the customer.\n\nTask: {task}\n\nTool results: {detailed_reasoning}"
+        final_response = llm.invoke([HumanMessage(content=summary_prompt)])
+        result_text = final_response.content
     
     # Determine action and reason based on the result
-    if "refund" in result.lower():
+    if "refund" in result_text.lower():
         action = "Refund issued"
-        if "stock" in result.lower() and ("0" in result or "not available" in result.lower() or "unavailable" in result.lower()):
+        if "stock" in result_text.lower() and ("0" in result_text or "not available" in result_text.lower() or "unavailable" in result_text.lower()):
             reason = "Stock not available for replacement."
         else:
             reason = "Per company policy for this issue type."
@@ -307,7 +380,10 @@ def resolve_issue(state: SupportAgentState):
     reasoning_summary = "\n".join([f"Step {i+1}: {step.get('thought', '')}" for i, step in enumerate(detailed_reasoning)])
 
     # Final resolution message
-    resolution_message = AIMessage(content=f"✅ **Resolution**: {action} | Reason: {reason}\n\n{result}")
+    resolution_message = AIMessage(content=f"✅ **Resolution**: {action} | Reason: {reason}\n\n{result_text}")
+
+    # Format reasoning for frontend display
+    formatted_reasoning = detailed_reasoning
 
     return {
         "messages": [*state.messages, *tool_messages, resolution_message],
@@ -321,39 +397,3 @@ def resolve_issue(state: SupportAgentState):
             "output": f"{action} - {reason}"
         }]
     }
-
-
-
-
-
-def create_pipeline() -> StateGraph:
-    from langgraph.graph import StateGraph, END
-    workflow = StateGraph(SupportAgentState)
-    workflow.add_node("classify", classify_issue)
-    workflow.add_node("policy", pick_policy)
-    workflow.add_node("resolve", resolve_issue)
-    workflow.set_entry_point("classify")
-    workflow.add_edge("classify", "policy")
-    workflow.add_edge("policy", "resolve")
-    workflow.add_edge("resolve", END)
-    return workflow
-def process_email_through_pipeline(email_text: str) -> dict:
-    """
-    Runs the pipeline for a given email text and returns the final state.
-    """
-    workflow = create_pipeline()
-    g = workflow.compile()
-
-    initial_state = {
-        "messages": email_text,
-        "problems": [],
-        "policy_name": "",
-        "policy_desc": "",
-        "policy_reason": "",
-        "action_taken": "",
-        "reason": "",
-        "reasoning": {},
-        "thought_process": []
-    }
-    result = g.invoke(initial_state)
-    return result
