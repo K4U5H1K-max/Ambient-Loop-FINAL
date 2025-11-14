@@ -4,9 +4,8 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
 class SupportAgentState(BaseModel):
-    # Whether the incoming message has been identified as a support ticket
-    is_support_ticket: bool = False
     messages: Annotated[List[BaseMessage], add_messages] = []
+    is_support_ticket: bool = False
     problems: List[str] = []
     policy_name: str = ""
     policy_desc: str = ""

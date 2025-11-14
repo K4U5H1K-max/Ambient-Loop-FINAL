@@ -88,52 +88,13 @@ def support_classification(state: SupportAgentState):
         Input: "Feature request: add two-factor auth" 
         Output: False
 
-        Now classify the following message and output only True or False:
-        <Message to classify>
-        ```You are a binary classifier. Given a single user message, decide if it is a customer support ticket about orders, shipments, refunds/returns/exchanges, resends/reshipments, stock inquiries, cancellations, payment disputes related to a specific order/product, or any direct request to act on an order (e.g., "check order status", "track order", "initiate refund", "resend item", "check stock", "cancel order", "return item"). 
-
-        Output requirements:
-        - Output exactly one token: either True or False (capitalized).
-        - No extra text, punctuation, explanation, or formatting.
-
-        Definitions of True:
-        - Explicit requests about an order (order IDs, product IDs), shipment tracking, initiating refunds/returns/resends, checking stock for fulfilling an order, cancellations, payment/refund status, or asking the service to perform such actions.
-        - Customer complaints about a specific order that request resolution (e.g., wrong/damaged item, missing items, late delivery).
-
-        Definitions of False:
-        - General questions (account settings, pricing, working hours), feedback/praise, marketing/feature requests, unrelated conversation, or informational queries not asking for action on an order.
-
-        Examples:
-        Input: "What's the status of order 12345?" 
-        Output: True
-
-        Input: "Please initiate a refund for order 98765, product SKU: ABC-1"
-        Output: True
-
-        Input: "My package tracking number 1Z999AA10123456784 shows delayed — please update" 
-        Output: True
-
-        Input: "Is product SKU-432 in stock?" 
-        Output: True
-
-        Input: "I received the wrong item and want to return it" 
-        Output: True
-
-        Input: "How do I reset my password?" 
-        Output: False
-
-        Input: "Do you offer bulk discounts?" 
-        Output: False
-
-        Input: "Feature request: add two-factor auth" 
-        Output: False
-
-        Now classify the following message and output only True or False:
-        <Message to classify>""")
+        Now classify the following message and output only True or False:""")
     
     response = llm.invoke([HumanMessage(content=f"{prompt}\nCustomer issue: {issue_text}")])
 
-    is_ticket = response.content.strip().lower() == ("true" or "yes")
+    # Parse the response - check if it contains "true" (case-insensitive)
+    response_text = response.content.strip().lower()
+    is_ticket = response_text in ("true", "yes") or "true" in response_text
     
     # Add classification message to the conversation
     classification_message = AIMessage(content=f"📁 *Support Ticket Classification*: {'Support Ticket' if is_ticket else 'General Inquiry'}")
