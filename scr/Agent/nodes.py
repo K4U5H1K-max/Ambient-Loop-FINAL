@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 from database.policies import format_policies_for_llm, get_policies_for_problem
 from dotenv import load_dotenv
 load_dotenv()
+from database.memory import get_policies_context, get_products_context
 # Custom callback handler to capture agent reasoning
 class ReasoningCaptureHandler(BaseCallbackHandler):
     def __init__(self):
@@ -158,64 +159,38 @@ def classify_issue(state: SupportAgentState):
     }
 
 def pick_policy(state: SupportAgentState):
-    issue_text = state.messages[0].content  # Original customer message
+    issue_text = state.messages[0].content
     problems_str = ", ".join(state.problems)
-    
-    # Get all relevant policies based on the identified problems
-    relevant_policies = {}
-    for problem in state.problems:
-        problem_policies = get_policies_for_problem(problem)
-        relevant_policies.update(problem_policies)
-    
-    # If no specific policies found, get all policies
-    if not relevant_policies:
-        all_policies = format_policies_for_llm()
-        policies_text = all_policies
-    else:
-        # Format the relevant policies for the LLM
-        policies_text = "# Relevant Customer Support Policies\n\n"
-        for name, policy in relevant_policies.items():
-            policies_text += f"## {name}\n"
-            policies_text += f"Description: {policy['description']}\n"
-            policies_text += f"When to use: {policy['when_to_use']}\n"
-            policies_text += f"Applicable problems: {', '.join(policy['applicable_problems'])}\n\n"
-    
-    # Get the issue classification reasoning to provide context
     classification_reasoning = state.reasoning.get("classify", "")
-    
+
+    # Fetch policies from memory store and inject as explicit context
+    policies_context = get_policies_context()
+
     prompt = (
-        "You are a support AI. Based on the customer issue and identified problem types, "
-        "determine the most appropriate company policy to apply from the provided list.\n\n"
-        "Review the policies carefully and select the one that best addresses the customer's situation.\n"
-        "Explain your reasoning for the policy selection and provide specific notes on how to apply it."
+        "You are a support AI. Use the provided policy memory context to select the most appropriate policy.\n"
+        "Do NOT assume hidden memory—only use what is shown.\n"
+        "Return a clear choice and reasoning.\n\n"
+        f"Customer Issue: {issue_text}\n"
+        f"Problem Types: {problems_str}\n"
+        f"Issue Analysis: {classification_reasoning}\n\n"
+        "Policy Memory Context (from store):\n"
+        f"{policies_context}"
     )
-    
-    # Create structured output LLM
+
     structured_llm = llm.with_structured_output(PolicySelection)
-    
-    # Get structured response
-    response = structured_llm.invoke([
-        HumanMessage(content=f"{prompt}\n\nCustomer Issue: {issue_text}\n\n"
-                            f"Problem Types: {problems_str}\n\n"
-                            f"Issue Analysis: {classification_reasoning}\n\n"
-                            f"Available Policies:\n{policies_text}")
-    ])
-    
-    # Extract data from structured response
+    response = structured_llm.invoke([HumanMessage(content=prompt)])
+
     policy_name = response.policy_name
     policy_desc = response.policy_description
     reasoning = response.reasoning
     application_notes = response.application_notes or ""
-    
-    # Add reasoning message to the conversation
+
     reasoning_message = AIMessage(content=f"🔍 **Policy Analysis**:\n{reasoning}")
-    
-    # Add policy selection message to the conversation
     policy_content = f"📋 **Selected Policy**: {policy_name}\n{policy_desc}"
     if application_notes:
         policy_content += f"\n\n📝 **Application Notes**: {application_notes}"
     policy_message = AIMessage(content=policy_content)
-        
+
     return {
         "messages": [*state.messages, reasoning_message, policy_message],
         "policy_name": policy_name,
@@ -227,6 +202,7 @@ def pick_policy(state: SupportAgentState):
             "output": f"{policy_name}: {policy_desc}"
         }]
     }
+
 
 def resolve_issue(state: SupportAgentState):
     # Create callback handler to capture reasoning
@@ -246,30 +222,40 @@ def resolve_issue(state: SupportAgentState):
     - P1005: Wireless Charging Pad ($39.99)
     """
     
+    # Fetch product context snapshot from store for richer reasoning
+    products_context = get_products_context()
+
     # Create task description
     task = (
         f"You are a customer support agent handling the following issue:\n"
         f"Customer issue: {issue_text}\n"
         f"Identified problem types: {problems_str}\n"
         f"Company policy: {policy_info}\n\n"
-        f"{product_mapping}\n"
+        f"Product Memory Context (from store):\n{products_context}\n\n"
+        f"Instructions:\n"
+        f"1. Extract order ID (format: ORD#####).\n"
+        f"2. Use tools as needed. Do not fabricate data not shown.\n"
+        f"3. Choose resend vs refund based strictly on stock availability and policy guidance.\n"
+        f"4. Keep reasoning concise but stepwise.\n"
+        f"5. If product not found in context, still proceed using tools to validate.\n"
+        f"Finish with a clear resolution summary."
         f"Follow these guidelines:\n"
         f"1. First, extract the order ID from the customer issue (format: ORD#####)\n"
         f"2. For non-delivery issues:\n"
-        f"   - Check order status using check_order_status\n"
-        f"   - Check tracking information using track_order\n"
+        f"   - Check order status using check_order_status_tool\n"
+        f"   - Check tracking information using track_order_tool\n"
         f"3. For damaged or defective product issues:\n"
         f"   - Identify the product from the customer's message\n"
-        f"   - Check stock availability using check_stock\n"
-        f"   - If stock is available, initiate a resend using initialize_resend\n"
-        f"   - If stock is not available (level 0), initiate a refund using initialize_refund\n"
+        f"   - Check stock availability using check_stock_tool\n"
+        f"   - If stock is available, initiate a resend using initialize_resend_tool\n"
+        f"   - If stock is not available (level 0), initiate a refund using initialize_refund_tool\n"
         f"4. For wrong item issues:\n"
         f"   - Identify both the incorrect item received and the correct item ordered\n"
-        f"   - Check stock of correct item using check_stock\n"
-        f"   - If correct item is in stock, initiate a resend using initialize_resend\n"
-        f"   - If correct item is out of stock, initiate a refund using initialize_refund\n"
+        f"   - Check stock of correct item using check_stock_tool\n"
+        f"   - If correct item is in stock, initiate a resend using initialize_resend_tool\n"
+        f"   - If correct item is out of stock, initiate a refund using initialize_refund_tool\n"
         f"5. For any other issues: Apply the relevant policy\n\n"
-        f"Investigate and resolve this issue step by step."
+        f"Use the available tools to investigate and resolve this issue. Explain your reasoning step by step."
     )
     
     # Use LLM with tools directly (compatible approach)

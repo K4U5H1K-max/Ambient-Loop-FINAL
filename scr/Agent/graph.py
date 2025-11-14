@@ -2,7 +2,36 @@ from langgraph.graph import StateGraph, END, START
 from state import SupportAgentState
 from nodes import classify_issue, pick_policy, resolve_issue, support_classification
 from langgraph.checkpoint.memory import MemorySaver
+from database.memory import (
+    get_policy_memory,
+    seed_policy_memory,
+    get_product_memory,
+    seed_product_memory,
+)
+from database.ticket_db import (
+    SessionLocal,
+    create_tables,
+)
+from database.seed_policies import seed_policies_from_py
+from database.seed_products import seed_products
 
+db = SessionLocal()
+
+# Ensure relational tables exist and seed them from code (idempotent)
+try:
+	create_tables()
+	seed_policies_from_py()
+	seed_products()
+except Exception as e:
+	print(f"[graph.py] DB setup/seeding warning: {e}")
+	
+try:
+    with get_policy_memory() as policy_store:
+        seed_policy_memory(db, policy_store)
+    with get_product_memory() as product_store:
+        seed_product_memory(db, product_store)
+except Exception as e:
+    print(f"[graph.py] Store seeding warning: {e}")
 
 def should_continue_to_classify(state: SupportAgentState):
     return "classify" if state.is_support_ticket else END
