@@ -412,23 +412,45 @@ def gmail_listener():
             messages = response.get("messages", [])
             for msg in messages:
                 msg_id = msg.get("id")
-                if msg_id and msg_id not in seen_ids:
-                    meta = get_message_meta(service, msg_id)
-                    subject = meta.get("headers", {}).get("Subject")
-                    sender = meta.get("headers", {}).get("From")
+                if not msg_id:
+                    continue
+                
+                # Skip already-read messages (idempotent: re-running won't re-process)
+                from mail_api import is_message_unread, mark_message_as_read
+                if not is_message_unread(service, msg_id):
+                    continue
+                
+                # Skip messages we've already seen in this session
+                if msg_id in seen_ids:
+                    continue
+                
+                # Process the unread message
+                meta = get_message_meta(service, msg_id)
+                subject = meta.get("headers", {}).get("Subject")
+                sender = meta.get("headers", {}).get("From")
 
-                    print(f"\n📩 New email detected: {subject}")
+                print(f"\n📩 New email detected: {subject}")
 
-                    payload = {
-                        "id": msg_id,
-                        "from": sender,
-                        "subject": subject,
-                        "date": meta.get("headers", {}).get("Date"),
-                    }
+                payload = {
+                    "id": msg_id,
+                    "from": sender,
+                    "subject": subject,
+                    "date": meta.get("headers", {}).get("Date"),
+                    "body": meta.get("body", ""),
+                }
 
-                    notify_agent(payload, config)
-
-                    seen_ids.add(msg_id)
+                # Process email and attempt to send reply if it's a support ticket
+                result = notify_agent(payload, config)
+                
+                # Only mark as read after successful reply (or if not a support ticket)
+                # This ensures failed sends can be retried on next poll
+                if result.get("status") == "processed":
+                    if mark_message_as_read(service, msg_id):
+                        seen_ids.add(msg_id)
+                    else:
+                        print(f"Warning: Failed to mark message {msg_id} as read, will retry")
+                else:
+                    print(f"Warning: Message {msg_id} processing failed, not marking as read to allow retry")
 
             time.sleep(60)
 
