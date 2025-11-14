@@ -1,0 +1,94 @@
+"""
+LangGraph Store integration for policies and products memory.
+"""
+from langgraph.store.postgres import PostgresStore
+from sqlalchemy.orm import Session
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+STORE_URL = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/support_tickets")
+
+def get_policy_memory():
+    """Return a PostgresStore context manager for policy namespace."""
+    return PostgresStore.from_conn_string(STORE_URL)
+
+def get_product_memory():
+    """Return a PostgresStore context manager for product namespace."""
+    return PostgresStore.from_conn_string(STORE_URL)
+
+def get_policies_context(limit: int = 25) -> str:
+    """Fetch policies from memory store for LLM context."""
+    uri = STORE_URL
+    if not uri:
+        return "(No policy memory available)"
+    
+    lines = []
+    try:
+        with PostgresStore.from_conn_string(uri) as store:
+            items = store.search(("policies",))
+            for item in items[:limit]:
+                val = item.value
+                lines.append(f"- {val.get('policy_name','?')}: {val.get('description','')} (Problems: {val.get('applicable_problems','[]')})")
+        return "\n".join(lines) if lines else "(No policies found in memory)"
+    except Exception as e:
+        return f"(Error retrieving policies: {str(e)})"
+
+def get_products_context(limit: int = 25) -> str:
+    """Fetch products from memory store for LLM context."""
+    uri = STORE_URL
+    if not uri:
+        return "(No product memory available)"
+    
+    lines = []
+    try:
+        with PostgresStore.from_conn_string(uri) as store:
+            items = store.search(("products",))
+            for item in items[:limit]:
+                val = item.value
+                lines.append(
+                    f"- {val.get('id','?')}: {val.get('name','?')} | ${val.get('price','?')} | {val.get('category','?')}"
+                )
+        return "\n".join(lines) if lines else "(No products found in memory)"
+    except Exception as e:
+        return f"(Error retrieving products: {str(e)})"
+
+def seed_policy_memory(db: Session, store):
+    """Seed LangMem from existing policies stored in the database."""
+    from database.ticket_db import Policy
+    
+    policies = db.query(Policy).all()
+    for policy in policies:
+        store.put(
+            ("policies",),
+            f"policy:{policy.id}",
+            {
+                "policy_name": policy.policy_name,
+                "description": policy.description,
+                "when_to_use": policy.when_to_use,
+                "applicable_problems": policy.applicable_problems,
+            }
+        )
+    print(f"✅ Seeded {len(policies)} policies into PostgresStore.")
+
+def seed_product_memory(db: Session, store):
+    """Load all product metadata into LangMem."""
+    from database.ticket_db import Product
+    
+    products = db.query(Product).all()
+    for product in products:
+        store.put(
+            ("products",),
+            f"product:{product.id}",
+            {
+                "id": product.id,
+                "name": product.name,
+                "description": product.description,
+                "price": product.price,
+                "category": product.category.value if hasattr(product.category, 'value') else product.category,
+                "weight": product.weight,
+                "dimensions": product.dimensions,
+            }
+        )
+    print(f"✅ Seeded {len(products)} products into PostgresStore.")

@@ -4,6 +4,10 @@ PostgreSQL database integration for storing support ticket data
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, JSON, Text, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Float
+from langgraph.store.postgres import PostgresStore
+from sqlalchemy.orm import Session
 from datetime import datetime
 import os
 from dotenv import load_dotenv
@@ -14,6 +18,7 @@ load_dotenv()
 
 # Get database connection string from environment variables
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/support_tickets")
+STORE_URL = os.getenv("POSTGRES_URI") or DATABASE_URL
 
 # Create SQLAlchemy engine and session
 engine = create_engine(DATABASE_URL)
@@ -85,6 +90,37 @@ class TicketState(Base):
             "reasoning": self.reasoning,
             "thought_process": self.thought_process
         }
+
+class Policy(Base):
+    __tablename__ = "policies"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    policy_name = Column(String, unique=True, nullable=False)
+    description = Column(Text, nullable=False)
+    when_to_use = Column(Text)
+    applicable_problems = Column(JSON)
+    last_updated = Column(DateTime, default=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "policy_name": self.policy_name,
+            "description": self.description,
+            "when_to_use": self.when_to_use,
+            "applicable_problems": self.applicable_problems,
+            "last_updated": self.last_updated.isoformat() if self.last_updated else None
+        }
+
+class Product(Base):
+    __tablename__ = "products"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=False)
+    price = Column(Float, nullable=False)
+    category = Column(String, nullable=False)
+    weight = Column(Float)
+    dimensions = Column(JSONB)
 
 # Create all tables
 def create_tables():
