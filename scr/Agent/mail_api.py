@@ -18,9 +18,9 @@ import logging
 from typing import Dict, List
 import requests
 from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+from google.auth.transport.requests import Request 
+from googleapiclient.discovery import build 
+from googleapiclient.errors import HttpError 
 from graph import graph_app
 from langchain_core.messages import HumanMessage
 import base64
@@ -151,10 +151,58 @@ def notify_agent(payload: Dict, config: Dict):
         if is_support_ticket:
             if ai_response:
                 print(f"\n--- AI Response ---\n{ai_response}\n")
+                
+                # Extract only the customer email part from AI response
+                # The AI response contains: Resolution part + Customer email part
+                # We need to extract only the "Dear ..." email section
+                import re
+                
+                # Pattern to extract customer email starting with "Dear" and ending before any metadata
+                customer_email = ai_response
+                
+                # Method 1: Extract content after "Resolution Summary:" or "Dear"
+                if "Resolution Summary:" in ai_response:
+                    customer_email = ai_response.split("Resolution Summary:", 1)[1].strip()
+                elif re.search(r'Dear [^,\n]+,', ai_response):
+                    # Find the position of "Dear ..." and extract from there
+                    match = re.search(r'(Dear [^,\n]+,.*)', ai_response, re.DOTALL)
+                    if match:
+                        customer_email = match.group(1).strip()
+                
+                # Method 2: Remove resolution metadata (lines starting with ✅, ###, etc.)
+                lines = customer_email.split('\n')
+                cleaned_lines = []
+                skip_section = False
+                
+                for line in lines:
+                    # Skip resolution metadata lines
+                    if line.strip().startswith('✅') or line.strip().startswith('###') or \
+                       line.strip().startswith('**Resolution**') or line.strip().startswith('**Extract') or \
+                       line.strip().startswith('1. **') or line.strip().startswith('2. **') or \
+                       line.strip().startswith('3. **') or line.strip().startswith('4. **') or \
+                       line.strip().startswith('5. **'):
+                        skip_section = True
+                        continue
+                    
+                    # Start including lines when we hit "Dear" or customer-facing content
+                    if line.strip().startswith('Dear') or (skip_section and line.strip() and not line.strip().startswith('#')):
+                        skip_section = False
+                    
+                    if not skip_section:
+                        cleaned_lines.append(line)
+                
+                customer_email = '\n'.join(cleaned_lines).strip()
+                
+                # Fallback: If extraction failed, use the whole response
+                if not customer_email or len(customer_email) < 50:
+                    customer_email = ai_response
+                
+                print(f"\n--- Customer Email (Cleaned) ---\n{customer_email}\n")
+                
                 reply_to = payload.get("from") or "anikakarampuri.test@gmail.com"
                 subject = f"Re: {payload.get('subject', 'Support Response')}"
                 try:
-                    send_email(get_gmail_service(), reply_to, subject, ai_response)
+                    send_email(get_gmail_service(), reply_to, subject, customer_email)
                     reply_sent = True
                     logging.info(f"✅ Support email sent to {reply_to}")
                 except Exception as e:
