@@ -6,7 +6,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import Float
-from langgraph.store.postgres import PostgresStore
+# from langgraph.store.postgres import PostgresStore
 from sqlalchemy.orm import Session
 from datetime import datetime
 import os
@@ -133,6 +133,10 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def get_session():
+    """Return a new database session."""
+    return SessionLocal()
 
 # Save ticket and state to database
 def save_ticket_state(ticket_data, state_data, db):
