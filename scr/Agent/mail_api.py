@@ -113,13 +113,13 @@ def notify_agent(payload: Dict, config: Dict):
 
         # Extract state values - handle both dict-like and object-like states
         if hasattr(final_state, 'get'):
-            is_support_ticket = final_state.get('is_support_ticket', False)
+            is_support_ticket = final_state.get('is_support_ticket', True)
             problems = final_state.get('problems', [])
             policy_name = final_state.get('policy_name', 'N/A')
             action_taken = final_state.get('action_taken', 'N/A')
             messages = final_state.get("messages", [])
         else:
-            is_support_ticket = getattr(final_state, 'is_support_ticket', False)
+            is_support_ticket = getattr(final_state, 'is_support_ticket', True)
             problems = getattr(final_state, 'problems', [])
             policy_name = getattr(final_state, 'policy_name', 'N/A')
             action_taken = getattr(final_state, 'action_taken', 'N/A')
