@@ -11,8 +11,6 @@ from database.policies import format_policies_for_llm, get_policies_for_problem
 from dotenv import load_dotenv
 load_dotenv()
 from database.memory import get_policies_context, get_products_context
-from langgraph.types import interrupt
-
 # Custom callback handler to capture agent reasoning
 class ReasoningCaptureHandler(BaseCallbackHandler):
     def __init__(self):
@@ -48,50 +46,18 @@ class PolicySelection(BaseModel):
 # Initialize LLM
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-
-
 def tier_classifier(state: SupportAgentState):
     issue_text = state.messages[0].content
     
     prompt = (
-        "You are a customer support AI Agent whose primary role is to classify "
-        "the tier level of incoming customer issues into three categories: "
-        "L1 (Basic), L2 (Intermediate), and L3 (Advanced)."
-    )
+        "You are a customer support AI Agent whose primary role is to classify the tier level of incoming customer issues into three categories: L1 (Basic), L2 (Intermediate), and L3 (Advanced). ")
     
     response = llm.invoke([HumanMessage(content=f"{prompt}\nCustomer issue: {issue_text}")])
     response_text = response.content.strip().lower()
-
-    if "l1" in response_text:
-        tier_level = "L1"
-    elif "l2" in response_text:
-        tier_level = "L2"
-    else:
-        tier_level = "L3"
-
-    # Interrupt and capture the decision
-    decision = interrupt({
-        "type": "tier_approval",
-        "tier": tier_level,
-        "message": f"This issue is classified as {tier_level}. Approve or Deny?",
-        "options": ["Deny", "Approve"]
-    })
-
-    # Process the decision - handle various response formats
-    approved = decision == "1"
-    
-    # Create message based on approval status
-    if approved:
-        status_msg = f"{tier_level} classification approved."
-    else:
-        status_msg = f"{tier_level} classification denied."
-    
+    tier_level = "L1" if "l1" in response_text else ("L2" if "l2" in response_text else "L3")
     return {
-        "tier_level": tier_level,
-        "approved": approved,
-        "messages": [*state.messages, AIMessage(content=status_msg)]
+        "tier_level": tier_level
     }
-
 
 #Refactored support ticket classification into query/issue classifier
 
