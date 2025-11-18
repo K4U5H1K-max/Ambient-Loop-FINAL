@@ -1,4 +1,4 @@
-from typing import List, Annotated, Dict
+from typing import List, Annotated, Dict, Optional, Any
 from pydantic import BaseModel
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
@@ -12,6 +12,8 @@ class SupportAgentState(BaseModel):
     query_issue: str = ""
     #tier classification
     tier_level: str = ""
+    # L3 approval
+    approved: Optional[bool] = None
     #policy details
     policy_name: str = ""
     policy_desc: str = ""
@@ -21,4 +23,4 @@ class SupportAgentState(BaseModel):
     # Capture reasoning at each step
     reasoning: Dict[str, str] = {}
     # Track agent's thought process
-    thought_process: List[Dict[str, str]] = []
+    thought_process: List[Dict[str, Any]] = []
