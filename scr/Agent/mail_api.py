@@ -18,13 +18,14 @@ import logging
 from typing import Dict, List
 import requests
 from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request 
-from googleapiclient.discovery import build 
-from googleapiclient.errors import HttpError 
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from graph import graph_app
 from langchain_core.messages import HumanMessage
 import base64
 from email.mime.text import MIMEText
+from langgraph.types import Command
 
 
 # SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
@@ -55,11 +56,29 @@ def get_gmail_service():
     if os.path.exists(TOKEN_PATH):
         with open(TOKEN_PATH, "rb") as token:
             creds = pickle.load(token)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    
+    # Check if token has all required scopes
+    has_all_scopes = False
+    if creds and creds.valid and hasattr(creds, 'scopes') and creds.scopes:
+        # Check if all required scopes are present
+        token_scopes = set(creds.scopes) if isinstance(creds.scopes, list) else set()
+        required_scopes = set(SCOPES)
+        has_all_scopes = required_scopes.issubset(token_scopes)
+    
+    # If there are no (valid) credentials available, or missing scopes, let the user log in.
+    if not creds or not creds.valid or not has_all_scopes:
+        if creds and creds.expired and creds.refresh_token and has_all_scopes:
+            # Only refresh if we have all scopes (refresh doesn't add new scopes)
             creds.refresh(Request())
         else:
+            # Need to re-authenticate (either no creds, invalid, or missing scopes)
+            if not has_all_scopes and creds:
+                logging.warning("Token missing required scopes. Re-authenticating to get full permissions...")
+                # Delete old token to force re-authentication
+                if os.path.exists(TOKEN_PATH):
+                    os.remove(TOKEN_PATH)
+                creds = None  # Reset creds to force new authentication
+            
             if not os.path.exists(CREDS_PATH):
                 raise FileNotFoundError(
                     "credentials.json not found. Create OAuth 2.0 Client ID credentials and save as credentials.json"
@@ -96,7 +115,9 @@ def save_state(state: Dict):
 #             logging.warning("Failed to notify webhook: %s", e)
 #     else:
 #         print(json.dumps(payload, ensure_ascii=False))
-def notify_agent(payload: Dict, config: Dict):
+
+
+def notify_agent(payload: Dict, config: Dict = None):
     """
     Process incoming email through the LangGraph Support Agent and reply if it's a support case.
     """
@@ -108,116 +129,36 @@ def notify_agent(payload: Dict, config: Dict):
             f"{payload.get('body', '') or ''}"
         )
 
-        # Run through LangGraph workflow
-        final_state = graph_app.invoke({"messages": [HumanMessage(content=email_text)]})
+        # Create config with thread_id if not provided
+        if config is None:
+            import uuid
+            config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
-        # Extract state values - handle both dict-like and object-like states
+        # Run through LangGraph workflow
+        final_state = graph_app.invoke(
+            {"messages": [HumanMessage(content=email_text)]},
+            config={"thread_id": payload["id"]}  # Pass config with thread_id
+        )
+
+        # Check if interrupted (tier approval needed)
+        if final_state.get("__interrupt__"):
+            interrupts = final_state["__interrupt__"][0].value
+            print(f"\nINTERRUPT: {interrupts['message']}")
+            print(f"Tier: {interrupts['tier']}")
+            print(f"Options: {interrupts['options']}")
+            
+
+            decision = "Approve"  
+            
+            # Resume with decision
+            final_state = graph_app.invoke(
+                Command(resume=decision),
+                config=config 
+            )
+
         if hasattr(final_state, 'get'):
             is_support_ticket = final_state.get('is_support_ticket', True)
-            problems = final_state.get('problems', [])
-            policy_name = final_state.get('policy_name', 'N/A')
-            action_taken = final_state.get('action_taken', 'N/A')
-            messages = final_state.get("messages", [])
-        else:
-            is_support_ticket = getattr(final_state, 'is_support_ticket', True)
-            problems = getattr(final_state, 'problems', [])
-            policy_name = getattr(final_state, 'policy_name', 'N/A')
-            action_taken = getattr(final_state, 'action_taken', 'N/A')
-            messages = getattr(final_state, 'messages', [])
-
-        # Basic logging
-        print("\n=== NEW EMAIL PROCESSED ===")
-        print(f"From: {payload.get('from')}")
-        print(f"Subject: {payload.get('subject')}")
-        print(f"Support Ticket: {is_support_ticket}")
-        print(f"Problems: {problems}")
-        print(f"Policy: {policy_name}")
-        print(f"Action: {action_taken}")
-
-        # Get the last AI response (resolution message if it's a support ticket)
-        ai_response = None
-
-        if messages:
-            # Get the last message content
-            last_message = messages[-1]
-            print(last_message)
-            if hasattr(last_message, 'content'):
-                ai_response = last_message.content
-            elif isinstance(last_message, dict):
-                ai_response = last_message.get('content', '')
-
-        # Send auto-reply only if it's a support ticket
-        reply_sent = False
-        if is_support_ticket:
-            if ai_response:
-                print(f"\n--- AI Response ---\n{ai_response}\n")
-                
-                # Extract only the customer email part from AI response
-                # The AI response contains: Resolution part + Customer email part
-                # We need to extract only the "Dear ..." email section
-                import re
-                
-                # Pattern to extract customer email starting with "Dear" and ending before any metadata
-                customer_email = ai_response
-                
-                # Method 1: Extract content after "Resolution Summary:" or "Dear"
-                if "Resolution Summary:" in ai_response:
-                    customer_email = ai_response.split("Resolution Summary:", 1)[1].strip()
-                elif re.search(r'Dear [^,\n]+,', ai_response):
-                    # Find the position of "Dear ..." and extract from there
-                    match = re.search(r'(Dear [^,\n]+,.*)', ai_response, re.DOTALL)
-                    if match:
-                        customer_email = match.group(1).strip()
-                
-                # Method 2: Remove resolution metadata (lines starting with ✅, ###, etc.)
-                lines = customer_email.split('\n')
-                cleaned_lines = []
-                skip_section = False
-                
-                for line in lines:
-                    # Skip resolution metadata lines
-                    if line.strip().startswith('✅') or line.strip().startswith('###') or \
-                       line.strip().startswith('**Resolution**') or line.strip().startswith('**Extract') or \
-                       line.strip().startswith('1. **') or line.strip().startswith('2. **') or \
-                       line.strip().startswith('3. **') or line.strip().startswith('4. **') or \
-                       line.strip().startswith('5. **'):
-                        skip_section = True
-                        continue
-                    
-                    # Start including lines when we hit "Dear" or customer-facing content
-                    if line.strip().startswith('Dear') or (skip_section and line.strip() and not line.strip().startswith('#')):
-                        skip_section = False
-                    
-                    if not skip_section:
-                        cleaned_lines.append(line)
-                
-                customer_email = '\n'.join(cleaned_lines).strip()
-                
-                # Fallback: If extraction failed, use the whole response
-                if not customer_email or len(customer_email) < 50:
-                    customer_email = ai_response
-                
-                print(f"\n--- Customer Email (Cleaned) ---\n{customer_email}\n")
-                
-                reply_to = payload.get("from") or "anikakarampuri.test@gmail.com"
-                subject = f"Re: {payload.get('subject', 'Support Response')}"
-                try:
-                    send_email(get_gmail_service(), reply_to, subject, customer_email)
-                    reply_sent = True
-                    logging.info(f"✅ Support email sent to {reply_to}")
-                except Exception as e:
-                    logging.error(f"❌ Failed to send email: {e}")
-                    raise  # Re-raise to prevent marking as read on failure
-            else:
-                logging.warning("⚠️ Support ticket detected but no response message found")
-        else:
-            logging.info("ℹ️ Not a support ticket — no reply sent")
-
-        return {
-            "status": "processed" if reply_sent or not is_support_ticket else "error",
-            "is_support": is_support_ticket,
-            "reply_sent": reply_sent
-        }
+            
 
     except Exception as e:
         logging.error(f"❌ notify_agent failed: {e}", exc_info=True)
@@ -280,7 +221,24 @@ def mark_message_as_read(service, msg_id: str) -> bool:
         logging.info(f"✅ Marked message {msg_id} as read")
         return True
     except HttpError as e:
-        logging.error(f"❌ Failed to mark message {msg_id} as read: {e}")
+        error_details = getattr(e, 'error_details', [])
+        reason = "unknown"
+        status_code = getattr(e, 'resp', {}).get('status', 0) if hasattr(e, 'resp') else 0
+        
+        if error_details:
+            for detail in error_details:
+                if isinstance(detail, dict) and 'reason' in detail:
+                    reason = detail['reason']
+                    break
+        
+        if status_code == 403 and reason == "insufficientPermissions":
+            logging.error(
+                f"❌ Failed to mark message {msg_id} as read: Insufficient permissions. "
+                f"The token is missing the 'gmail.modify' scope. "
+                f"Please delete token.pickle and re-authenticate to grant full permissions."
+            )
+        else:
+            logging.error(f"❌ Failed to mark message {msg_id} as read: {e}")
         return False
 
 
