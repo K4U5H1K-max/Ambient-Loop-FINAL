@@ -16,7 +16,7 @@ from state import SupportAgentState
 from langchain_core.messages import HumanMessage
 
 # Import database components
-from database.ticket_db import get_db, save_ticket_state, Ticket, TicketState, SessionLocal
+from database.ticket_db import get_db, save_ticket_state, Ticket, TicketState
 from contextlib import asynccontextmanager
 import threading
 import time
@@ -83,7 +83,7 @@ class TicketDetailResponse(TicketResponse):
     thought_process: Optional[List[Dict[str, Any]]] = None
 
 # Process ticket in background
-def process_ticket_task(ticket_data: Dict[str, Any]):
+def process_ticket_task(ticket_data: Dict[str, Any], db: Session = Depends(get_db)):
     """
     Process a ticket using the LangGraph workflow and save results to database
     """
@@ -98,7 +98,7 @@ def process_ticket_task(ticket_data: Dict[str, Any]):
         
         # Log the completion of the workflow
         print(f"Workflow completed for ticket {ticket_data['ticket_id']}")
-        print(f"Final state: {final_state}")
+        print(f"Final state: {final_state}`")
         
         # Handle different state object types
         # If final_state is a dict-like object (AddableValuesDict)
@@ -121,12 +121,7 @@ def process_ticket_task(ticket_data: Dict[str, Any]):
         # Save ticket and state to database
         print(f"Saving ticket and state to database: {ticket_data}, {final_state}")
         try:
-            # Get a new database session for background task
-            db_session = SessionLocal()
-            try:
-                save_ticket_state(ticket_data, final_state, db_session)
-            finally:
-                db_session.close()
+            save_ticket_state(ticket_data, final_state, db)
         except Exception as e:
             print(f"Error saving ticket state: {str(e)}")
             # Continue execution even if saving to DB fails
@@ -186,7 +181,7 @@ async def create_ticket(
         }
         
         # Add ticket processing to background tasks
-        background_tasks.add_task(process_ticket_task, ticket_data)
+        background_tasks.add_task(process_ticket_task, ticket_data, db)
         
         return {
             "ticket_id": ticket.ticket_id,
@@ -316,6 +311,103 @@ async def list_tickets(db: Session = Depends(get_db)):
     return result
 
 
+# def process_ticket_task(ticket_data: Dict[str, Any], db: Session = Depends(get_db)):
+#     """
+#     Process a ticket using the LangGraph workflow and save results to database
+#     """
+#     try:
+#         # Create initial state with customer message
+#         initial_state = SupportAgentState(
+#             messages=[HumanMessage(content=ticket_data["description"])]
+#         )
+        
+#         # Execute the graph
+#         final_state = graph_app.invoke(initial_state)
+        
+#         # Log the completion of the workflow
+#         print(f"Workflow completed for ticket {ticket_data['ticket_id']}")
+#         print(f"Final state: {final_state}`")
+
+#         print(f"Type of final_state: {type(final_state)}")
+#         print(f"Attributes available: {dir(final_state)}")
+        
+#         # Handle different state object types
+#         # If final_state is a dict-like object (AddableValuesDict)
+#         # if hasattr(final_state, 'get'):
+#         #     # Extract relevant fields safely using get() method
+#         #     problems = final_state.get('problems', [])
+#         #     actions = final_state.get('actions', None)
+#         #     action_taken = actions[0] if isinstance(actions, list) and actions else None
+#         #     messages = final_state.get('messages', [])
+#         #     print(f"Problems identified: {problems}")
+#         #     print(f"Action taken: {action_taken}")
+#         # else:
+#         #     # Try to access attributes directly if it's an object with attributes
+#         #     problems = getattr(final_state, 'problems', []) if hasattr(final_state, 'problems') else []
+#         #     action_taken = getattr(final_state, 'action_taken', None) if hasattr(final_state, 'action_taken') else None
+#         #     messages = getattr(final_state, 'messages', []) if hasattr(final_state, 'messages') else []
+#         #     print(f"Problems identified: {problems}")
+#         #     print(f"Action taken: {action_taken}")
+        
+#         # Save ticket and state to database
+#         print(f"Saving ticket and state to database: {ticket_data}, {final_state}")
+#         try:
+#             save_ticket_state(ticket_data, final_state, db)
+#         except Exception as e:
+#             print(f"Error saving ticket state: {str(e)}")
+#             # Continue execution even if saving to DB fails
+        
+#         # Return the final state
+#         return final_state
+#     except Exception as e:
+#         print(f"Error processing ticket {ticket_data['ticket_id']}: {str(e)}")
+#         # Re-raise the exception to be handled by the caller
+#         raise e
+
+# @app.get("/tickets", response_model=List[TicketResponse])
+# async def list_tickets(db: Session = Depends(get_db)):
+#     """
+#     List all tickets
+#     """
+#     tickets = db.query(Ticket).all()
+    
+#     result = []
+#     for ticket in tickets:
+#         ticket_data = {
+#             "ticket_id": ticket.ticket_id,
+#             "status": ticket.status,
+#             "message": "Ticket found",
+#             "description": ticket.description,
+#             "customer_id": ticket.customer_id
+#         }
+        
+#         try:
+#             # Use a specific query that only selects columns that exist in the database
+#             ticket_state = db.query(
+#                 TicketState.problems,
+#                 TicketState.policy_name,
+#                 TicketState.action_taken,
+#                 TicketState.messages
+#             ).filter(TicketState.ticket_id == ticket.id).first()
+            
+#             if ticket_state:
+#                 ticket_data.update({
+#                     "problems": ticket_state.problems,
+#                     "policy_name": ticket_state.policy_name,
+#                     "action_taken": ticket_state.action_taken,
+#                     "messages": ticket_state.messages if ticket_state.messages else []
+#                 })
+#         except Exception as e:
+#             print(f"Error accessing ticket state data: {str(e)}")
+#             # Continue without state data
+#             db.rollback()  # Roll back the transaction to avoid cascading errors
+#             ticket_data["messages"] = []  # Ensure messages field is present even on error
+        
+#         result.append(ticket_data)
+    
+#     return result
+
+
 def gmail_listener():
     """
     Background thread that continuously polls Gmail and processes new support emails.
@@ -383,6 +475,7 @@ def gmail_listener():
         except Exception as e:
             print(f"Gmail listener error: {e}")
             time.sleep(60)
+
 
 
 if __name__ == "__main__":
