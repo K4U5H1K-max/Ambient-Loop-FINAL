@@ -47,8 +47,21 @@ workflow.add_node("resolve", resolve_issue)
 
 workflow.set_entry_point("tier_classification")
 # workflow.add_edge(START, "tier_classification")
-workflow.add_conditional_edges("tier_classification", should_continue_from_tier)
-workflow.add_edge("query_issue_classification", "classify")
+workflow.add_conditional_edges(
+    "tier_classification",
+    should_continue_from_tier,
+    {
+        "query_issue_classification": "query_issue_classification",
+        END: END
+    })
+workflow.add_conditional_edges(
+    "query_issue_classification",
+    should_continue_to_classify,
+    {
+        "classify": "classify",
+        END: END
+    }
+)
 workflow.add_edge("classify", "policy")
 workflow.add_edge("policy", "resolve")
 workflow.add_edge("resolve", END)
