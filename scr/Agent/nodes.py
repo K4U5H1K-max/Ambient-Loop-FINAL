@@ -461,6 +461,13 @@ def resolve_issue(state: SupportAgentState):
                     if resp["type"] == "accept":
                         pass # Do nothing, proceed to tool call, let it get executed
                     elif resp["type"] == "ignore":
+                        messages.append(
+                            ToolMessage(
+                                name=tool_name,
+                                content="ACTION_DENIED_BY_HUMAN_REQUEST",
+                                tool_call_id=tool_call["id"]
+                            )
+                        )
                         continue  # Skip this tool call
                 
                 # Execute the tool
