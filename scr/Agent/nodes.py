@@ -1,6 +1,7 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.callbacks import BaseCallbackHandler
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 from state import SupportAgentState
 from tools import check_order_status, track_order, check_stock, initialize_resend, initialize_refund
@@ -335,7 +336,6 @@ def pick_policy(state: SupportAgentState):
 def resolve_issue(state: SupportAgentState):
     # Create callback handler to capture reasoning
     reasoning_handler = ReasoningCaptureHandler()
-
     issue_text = state.messages[0].content
     policy_info = f"{state.policy_name}: {state.policy_desc}"
     problems_str = ", ".join(state.problems)
@@ -404,47 +404,103 @@ def resolve_issue(state: SupportAgentState):
     tools = [check_order_status, track_order, check_stock, initialize_resend, initialize_refund]
     llm_with_tools = llm.bind_tools(tools)
     
-    # Get response with tool calls
-    response = llm_with_tools.invoke([HumanMessage(content=task)])
-    
-    # Process tool calls if any
+    # Maintaining rolling messages for tool-loop
+    messages = [HumanMessage(content=task)]
     tool_messages = []
     detailed_reasoning = []
     result_text = ""
-    
-    if hasattr(response, 'tool_calls') and response.tool_calls:
-        for tool_call in response.tool_calls:
-            tool_name = tool_call['name']
-            tool_input = tool_call['args']
-            
-            # Execute the tool
-            tool_func = None
-            for t in tools:
-                if t == tool_name:
-                    tool_func = t
-                    break
-            
-            if tool_func:
-                # Call the tool
-                tool_result = tool_func.invoke(tool_input)
+    while True:
+        response = llm_with_tools.invoke(messages)
+
+        if not response.tool_calls:
+            break  # No more tool calls, exit loop
+
+        print(f"\nResponse(please have tool_calls): {response}\n")
+        print(f"\nTools available: {response.tool_calls if hasattr(response, 'tool_calls') else 'No tool calls'}\n")
+        # Process tool calls if any
+        #tool_messages = []
+        #detailed_reasoning = []
+        #result_text = ""
+
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            messages.append(
+                AIMessage(
+                    content="",
+                    tool_calls=response.tool_calls
+                )
+            )
+            for tool_call in response.tool_calls:
+                tool_name = tool_call['name']
+                tool_input = tool_call['args']
                 
-                # Record reasoning
-                detailed_reasoning.append({
-                    "thought": f"Calling {tool_name}",
-                    "action": tool_name,
-                    "action_input": str(tool_input),
-                    "result": tool_result
-                })
+                # Interruption of Critical Tools
+                if tool_name in ['initialize_refund', 'initialize_resend']:
+                    # Create the interrupt request
+                    request = {
+                        "action_request": {
+                            "action": tool_call["name"],
+                            "args": tool_call["args"]
+                        },
+                        "config": {
+                                    "allow_ignore": True,
+                                    "allow_respond": False,
+                                    "allow_edit": False,
+                                    "allow_accept": True
+                                },
+                        "description": f"""
+                    Action Requires Approval
+
+                    The support agent is attempting to perform a critical and high-impact order resolution action that requires your explicit approval.
+
+                    Action Type: {tool_name}
+                    """
+                    }
+                    print('\nEntered into the "FINAL BOSS INTERRUPT IF!! LESSSSGOOOOOO!!!"\n')
+                    resp = interrupt(request)[0]
+
+                    if resp["type"] == "accept":
+                        pass # Do nothing, proceed to tool call, let it get executed
+                    elif resp["type"] == "ignore":
+                        continue  # Skip this tool call
                 
-                # Add messages
-                tool_messages.append(AIMessage(content=f"🤔 Calling {tool_name} with {tool_input}"))
-                tool_messages.append(ToolMessage(
-                    name=tool_name,
-                    content=str(tool_input),
-                    tool_call_id=tool_call.get('id', f"call_{len(tool_messages)}")
-                ))
-                tool_messages.append(AIMessage(content=f"📊 Tool response:\n{tool_result}"))
-    
+                # Execute the tool
+                tool_func = None
+                for t in tools:
+                    if t.__name__ == tool_name:
+                        tool_func = t
+                        break
+                
+                if tool_func:
+                    # Call the tool
+                    if isinstance(tool_input, dict):
+                        tool_result = tool_func(**tool_input)
+                    else:
+                        tool_result = tool_func(tool_input)
+                    
+                    # Record reasoning
+                    detailed_reasoning.append({
+                        "thought": f"Calling {tool_name}",
+                        "action": tool_name,
+                        "action_input": str(tool_input),
+                        "result": tool_result
+                    })
+                    
+                    # Add messages
+                    tool_messages.append(AIMessage(content=f"🤔 Calling {tool_name} with {tool_input}"))
+                    tool_messages.append(ToolMessage(
+                        name=tool_name,
+                        content=str(tool_input),
+                        tool_call_id=tool_call.get('id', f"call_{len(tool_messages)}")
+                    ))
+                    tool_messages.append(AIMessage(content=f"📊 Tool response:\n{tool_result}"))
+
+                    messages.append(
+                        ToolMessage(
+                                name=tool_name,
+                                content=str(tool_result),
+                                tool_call_id=tool_call["id"]
+                            )
+                    )
     # Get final response from LLM
     if response.content:
         result_text = response.content
