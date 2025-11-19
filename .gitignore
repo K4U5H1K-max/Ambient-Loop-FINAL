@@ -43,7 +43,11 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# LangGraph
+.langgraph_api/
+*.pickle
 
-.langgraph_api
-.pickle
-scr\Agent\credentials.json
+# Credentials
+scr/Agent/credentials.json
+scr/Agent/token.pickle
+scr/Agent/state.json
