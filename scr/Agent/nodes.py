@@ -178,34 +178,76 @@ Be decisive, consistent, and err on the side of appropriate escalation to ensure
         tier_level = "L3"
 
     # Interrupt and capture the decision
-    if tier_level == "L3":
-        decision = interrupt({
-            "type": "tier_approval",
-            "tier": tier_level,
-            "message": f"This issue is classified as {tier_level}. Approve or Deny?",
-            "options": ["Deny", "Approve"]
-        })
+    # if tier_level == "L3":
+    #     decision = interrupt({
+    #         "type": "tier_approval",
+    #         "tier": tier_level,
+    #         "message": f"This issue is classified as {tier_level}. Approve or Deny?",
+    #         "options": ["Deny", "Approve"]
+    #     })
 
-    # Process the decision - handle various response formats
-        approved = decision == "1"
+    # # Process the decision - handle various response formats
+    #     approved = decision == "1"
         
-        # Create message based on approval status
-        if approved:
+    #     # Create message based on approval status
+    #     if approved:
+    #         status_msg = f"{tier_level} classification approved."
+    #     else:
+    #         status_msg = f"{tier_level} classification denied."
+        
+    #     return {
+    #         "tier_level": tier_level,
+    #         "approved": approved,
+    #         "messages": [*state.messages, AIMessage(content=status_msg)]
+    #     }
+    # else:
+    #     return {
+    #         "tier_level": tier_level,
+    #         "approved": True,
+    #         "messages": [*state.messages, AIMessage(content=f"{tier_level} classification automatically approved.")]
+    #     }
+
+    if tier_level == "L3":
+        # Build interrupt request (SAME FORMAT as the refund/resend one)
+        request = {
+            "action_request": {
+                "action": "tier_classification",
+                "args": {
+                    "tier": tier_level,
+                    "issue": issue_text
+                }
+            },
+            "config": {
+                "allow_ignore": True,
+                "allow_respond": False,
+                "allow_edit": False,
+                "allow_accept": True
+            },
+            "description": f"""
+    A Tier 3 classification requires human approval.
+
+    The AI has classified this issue as **{tier_level}** based on complexity and business impact.
+
+    Approve to continue with Tier 3 handling or ignore to downgrade.
+    """
+        }
+
+        # Send interrupt call and get human decision
+        resp = interrupt(request)[0]
+
+        if resp["type"] == "accept":
+            approved = True
             status_msg = f"{tier_level} classification approved."
         else:
+            approved = False
             status_msg = f"{tier_level} classification denied."
-        
+
         return {
             "tier_level": tier_level,
             "approved": approved,
             "messages": [*state.messages, AIMessage(content=status_msg)]
         }
-    else:
-        return {
-            "tier_level": tier_level,
-            "approved": True,
-            "messages": [*state.messages, AIMessage(content=f"{tier_level} classification automatically approved.")]
-        }
+
 
 
 #Refactored support ticket classification into query/issue classifier
