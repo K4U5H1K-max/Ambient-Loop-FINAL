@@ -6,7 +6,7 @@ from langchain_core.messages import BaseMessage
 class SupportAgentState(BaseModel):
     messages: Annotated[List[BaseMessage], add_messages] = []
     #add a issue classifier
-    is_support_ticket: bool = True# default to true for support ticket
+    is_support_ticket: bool = False# default to false for support ticket it is going to be over written to true when classified in validation node
     products_cache: Optional[str] = None  # Preloaded products context
     problems: List[str] = []
     #query issue classification

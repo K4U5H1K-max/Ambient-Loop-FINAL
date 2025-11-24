@@ -35,12 +35,12 @@ def route_after_validation(state: SupportAgentState):
     """Route after validation: if support ticket, go to tier classifier, else end."""
     return "tier_classification" if state.is_support_ticket else END
 
-def should_continue_from_tier(state: SupportAgentState):
-    """Check if tier classification was approved. If denied, end the flow."""
-    return "query_issue_classification" if getattr(state, 'approved', False) else END
+# def should_continue_from_tier(state: SupportAgentState):
+#     """Check if tier classification was approved. If denied, end the flow."""
+#     return "query_issue_classification" if getattr(state, 'approved', False) else END
 
-def should_continue_to_classify(state: SupportAgentState):
-    return "classify" if state.is_support_ticket else END
+# def should_continue_to_classify(state: SupportAgentState):
+#     return "classify" if state.is_support_ticket else END
 
 workflow = StateGraph(SupportAgentState)
 workflow.add_node("validate", validate_and_load_context)
@@ -59,21 +59,8 @@ workflow.add_conditional_edges(
         END: END
     }
 )
-workflow.add_conditional_edges(
-    "tier_classification",
-    should_continue_from_tier,
-    {
-        "query_issue_classification": "query_issue_classification",
-        END: END
-    })
-workflow.add_conditional_edges(
-    "query_issue_classification",
-    should_continue_to_classify,
-    {
-        "classify": "classify",
-        END: END
-    }
-)
+workflow.add_edge("tier_classification", "query_issue_classification")
+workflow.add_edge("query_issue_classification","classify")
 workflow.add_edge("classify", "policy")
 workflow.add_edge("policy", "resolve")
 workflow.add_edge("resolve", END)
