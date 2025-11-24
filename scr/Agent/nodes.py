@@ -12,7 +12,6 @@ from database.policies import format_policies_for_llm, get_policies_for_problem
 from dotenv import load_dotenv
 load_dotenv()
 from database.memory import get_policies_context, get_products_context
-from langgraph.types import interrupt
 
 # Custom callback handler to capture agent reasoning
 class ReasoningCaptureHandler(BaseCallbackHandler):
@@ -49,6 +48,42 @@ class PolicySelection(BaseModel):
 # Initialize LLM
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
+
+def validate_and_load_context(state: SupportAgentState):
+    """Validate if message is support ticket and preload products context if yes."""
+    print("---VALIDATING TICKET AND LOADING CONTEXT---")
+    
+    # Get the latest user message
+    user_message = None
+    for msg in reversed(state.messages):
+        if msg.type == "human":
+            user_message = msg.content
+            break
+    
+    if not user_message:
+        return {"is_support_ticket": False}
+    
+    # Use LLM to classify if this is a support ticket
+    classification_prompt = f"""Determine if the following message is a customer support ticket (order issues, product questions, complaints, refunds, etc.).
+    
+Message: {user_message}
+
+Respond with only 'YES' if it's a support ticket, or 'NO' if it's spam, gibberish, or unrelated."""
+    
+    response = llm.invoke(classification_prompt)
+    is_support = response.content.strip().upper() == "YES"
+    
+    if is_support:
+        # Preload products context
+        products_context = get_products_context()
+        print(f"Loaded products context: {len(products_context)} chars")
+        return {
+            "is_support_ticket": True,
+            "products_cache": products_context
+        }
+    else:
+        print("Not a support ticket - ending workflow")
+        return {"is_support_ticket": False}
 
 
 def tier_classifier(state: SupportAgentState):
@@ -272,8 +307,7 @@ def query_issue_classifier(state: SupportAgentState):
     # classification_message = AIMessage(content=f"📁 *Support Ticket Classification*: {'Support Ticket' if is_ticket else 'General Inquiry'}")
     
     return {
-        "query_issue": answer,
-        "is_support_ticket": True
+        "query_issue": answer
     }
 
 
@@ -392,8 +426,8 @@ def resolve_issue(state: SupportAgentState):
     - P1005: Wireless Charging Pad ($39.99)
     """
     
-    # Fetch product context snapshot from store for richer reasoning
-    products_context = get_products_context()
+    # Use cached products context from validation node
+    products_context = state.products_cache or ""
 
     # Create task description
     task = (

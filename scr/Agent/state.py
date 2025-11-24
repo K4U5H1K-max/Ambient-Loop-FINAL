@@ -7,6 +7,7 @@ class SupportAgentState(BaseModel):
     messages: Annotated[List[BaseMessage], add_messages] = []
     #add a issue classifier
     is_support_ticket: bool = True# default to true for support ticket
+    products_cache: Optional[str] = None  # Preloaded products context
     problems: List[str] = []
     #query issue classification
     query_issue: str = ""
