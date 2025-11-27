@@ -18,22 +18,32 @@ def get_product_memory():
     """Return a PostgresStore context manager for product namespace."""
     return PostgresStore.from_conn_string(STORE_URL)
 
-def get_policies_context(limit: int = 25) -> str:
+def get_policies_context(query: str = "", limit: int = 25) -> str:
     """Fetch policies from memory store for LLM context."""
     uri = STORE_URL
     if not uri:
-        return "(No policy memory available)"
+        # Fallback to static policies
+        from database.policies import format_policies_for_llm
+        return format_policies_for_llm()
     
     lines = []
     try:
         with PostgresStore.from_conn_string(uri) as store:
-            items = store.search(("policies",))
-            for item in items[:limit]:
+            # For queries, return all policies since they are general
+            items = store.search(("policies",), limit=limit)
+            for item in items:
                 val = item.value
                 lines.append(f"- {val.get('policy_name','?')}: {val.get('description','')} (Problems: {val.get('applicable_problems','[]')})")
-        return "\n".join(lines) if lines else "(No policies found in memory)"
+        if lines:
+            return "\n".join(lines)
+        else:
+            # Fallback if store is empty
+            from database.policies import format_policies_for_llm
+            return format_policies_for_llm()
     except Exception as e:
-        return f"(Error retrieving policies: {str(e)})"
+        # Fallback on error
+        from database.policies import format_policies_for_llm
+        return format_policies_for_llm()
 
 def get_products_context(limit: int = 25) -> str:
     """Fetch products from memory store for LLM context."""

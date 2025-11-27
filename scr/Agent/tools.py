@@ -46,8 +46,23 @@ def track_order(order_id: str) -> str:
     return response
 
 def check_stock(product_id: str) -> str:
-    """Check the stock level of a product by its product ID"""
-    stock_info = ERPService.check_stock(product_id)
+    """Check the stock level of a product by its product ID or name"""
+    from database.data import PRODUCTS
+    
+    # If input looks like a product ID (P followed by digits), use it directly
+    if product_id.startswith('P') and len(product_id) == 5 and product_id[1:].isdigit():
+        actual_id = product_id
+    else:
+        # Try to find product by name
+        actual_id = None
+        for pid, product in PRODUCTS.items():
+            if product.name.lower() == product_id.lower():
+                actual_id = pid
+                break
+        if not actual_id:
+            return f"Error: Product not found"
+    
+    stock_info = ERPService.check_stock(actual_id)
     
     if 'error' in stock_info:
         return f"Error: {stock_info['error']}"

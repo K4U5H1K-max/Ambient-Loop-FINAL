@@ -9,7 +9,6 @@ from langchain_core.tools import tool as create_tool
 import json
 from typing import Dict, Any, List, Optional
 from database.policies import format_policies_for_llm, get_policies_for_problem
-from difflib import get_close_matches
 from dotenv import load_dotenv
 load_dotenv()
 from database.memory import get_policies_context, get_products_context
@@ -371,105 +370,41 @@ def pick_policy(state: SupportAgentState):
 
     # Fetch policies from memory store and inject as explicit context
     policies_context = get_policies_context()
-    # Try to obtain a concrete list of candidate policies from the policy service
-    candidate_policies = None
-    try:
-        candidate_policies = get_policies_for_problem(issue_text)
-    except Exception:
-        candidate_policies = None
 
-    # Normalize candidate policy names and descriptions
-    allowed_names = []
-    policy_map = {}
-    if isinstance(candidate_policies, list) and candidate_policies:
-        for p in candidate_policies:
-            # support dicts with different keys
-            name = p.get("name") if isinstance(p, dict) else None
-            if not name:
-                name = p.get("policy_name") if isinstance(p, dict) else None
-            desc = p.get("description") if isinstance(p, dict) else None
-            if not name and isinstance(p, str):
-                # If entries are strings, try to split into name/desc
-                name = p
-            if name:
-                allowed_names.append(name)
-                policy_map[name] = desc or ""
-
-    # If no structured candidates, fall back to the pre-formatted policy text
-    policies_text = format_policies_for_llm() if not policies_context else policies_context
-
-    # Build a strict prompt that enumerates candidates (if available) and requires exact selection
-    if allowed_names:
-        candidates_block = "\n".join([f"{i+1}. {n} - {policy_map.get(n,'')}" for i, n in enumerate(allowed_names)])
-        instruction = (
-            "You are a support AI. From the exact policy names listed below, choose the single most appropriate policy for the customer issue.\n"
-            "Important: Your output MUST follow the PolicySelection JSON schema exactly, and `policy_name` MUST be one of the policy names listed (case-sensitive exact match).\n"
-            "If you cannot find a suitable policy, set `policy_name` to the string 'UNKNOWN' and provide your reasoning. Do NOT invent new policy names.\n\n"
-            f"Candidate Policies:\n{candidates_block}\n\n"
-            f"Customer Issue: {issue_text}\n"
-            f"Problem Types: {problems_str}\n"
-            f"Issue Analysis: {classification_reasoning}\n\n"
-        )
-    else:
-        instruction = (
-            "You are a support AI. Use the policy context below to pick the most appropriate policy.\n"
-            "Return a PolicySelection JSON object. If you cannot identify a policy name exactly, set `policy_name` to 'UNKNOWN'. Do NOT fabricate policy names.\n\n"
-            f"Policy Context:\n{policies_text}\n\n"
-            f"Customer Issue: {issue_text}\n"
-            f"Problem Types: {problems_str}\n"
-            f"Issue Analysis: {classification_reasoning}\n\n"
-        )
+    prompt = (
+        "You are a support AI. Use the provided policy memory context to select the most appropriate policy.\n"
+        "Do NOT assume hidden memory—only use what is shown.\n"
+        "Return a clear choice and reasoning.\n\n"
+        f"Customer Issue: {issue_text}\n"
+        f"Problem Types: {problems_str}\n"
+        f"Issue Analysis: {classification_reasoning}\n\n"
+        "Policy Memory Context (from store):\n"
+        f"{policies_context}"
+    )
 
     structured_llm = llm.with_structured_output(PolicySelection)
-    response = structured_llm.invoke([HumanMessage(content=instruction)])
+    response = structured_llm.invoke([HumanMessage(content=prompt)])
 
-    policy_name = getattr(response, "policy_name", None)
-    policy_desc = getattr(response, "policy_description", "")
-    reasoning = getattr(response, "reasoning", "")
-    application_notes = getattr(response, "application_notes", None) or ""
+    policy_name = response.policy_name
+    policy_desc = response.policy_description
+    reasoning = response.reasoning
+    application_notes = response.application_notes or ""
 
-    # Validate the returned policy_name
-    selected_name = None
-    if policy_name and allowed_names:
-        # direct match
-        if policy_name in allowed_names:
-            selected_name = policy_name
-        else:
-            # try fuzzy matching
-            matches = get_close_matches(policy_name, allowed_names, n=1, cutoff=0.6)
-            if matches:
-                selected_name = matches[0]
-
-    # If still no selection, try to pick a safe fallback
-    if not selected_name:
-        if allowed_names:
-            # fallback to the first candidate and record that this was a fallback
-            selected_name = allowed_names[0]
-            policy_desc = policy_map.get(selected_name, policy_desc or "")
-            reasoning = (reasoning or "") + "\n\n(Fallback: model did not return an exact policy name; selected first candidate.)"
-        else:
-            # No candidates available, use UNKNOWN and keep the model's description
-            selected_name = policy_name or "UNKNOWN"
-
-    # Compose messages for the conversation
     reasoning_message = AIMessage(content=f"🔍 **Policy Analysis**:\n{reasoning}")
-    policy_content = f"📋 **Selected Policy**: {selected_name}\n{policy_desc}"
+    policy_content = f"📋 **Selected Policy**: {policy_name}\n{policy_desc}"
     if application_notes:
         policy_content += f"\n\n📝 **Application Notes**: {application_notes}"
     policy_message = AIMessage(content=policy_content)
 
-    # Log selection for auditing (printed output will appear in logs)
-    print(f"pick_policy: selected='{selected_name}' (validated: {selected_name in allowed_names}), original_returned='{policy_name}'")
-
     return {
         "messages": [*state.messages, reasoning_message, policy_message],
-        "policy_name": selected_name,
+        "policy_name": policy_name,
         "policy_desc": policy_desc,
         "reasoning": {**state.reasoning, "policy": reasoning},
         "thought_process": state.thought_process + [{
             "step": "pick_policy",
             "reasoning": reasoning,
-            "output": f"{selected_name}: {policy_desc}"
+            "output": f"{policy_name}: {policy_desc}"
         }]
     }
 
@@ -493,41 +428,6 @@ def resolve_issue(state: SupportAgentState):
     
     # Use cached products context from validation node
     products_context = state.products_cache or ""
-
-    # SHORT-CIRCUIT: if this is a general policy/query request (no actionable order),
-    # do NOT call tools. Instead, return a policy-only informational email.
-    query_issue_flag = getattr(state, "query_issue", None)
-    problems_lower = ", ".join(state.problems).lower() if getattr(state, "problems", None) else ""
-    if query_issue_flag == "query" or "general" in problems_lower or not state.problems:
-        policies_context = get_policies_context()
-        policy_text = state.policy_desc or policies_context or (
-            "Damaged Item Policy: If a customer receives a damaged or defective item, they are eligible for an immediate replacement or full refund, including shipping costs."
-        )
-
-        email_body = (
-            "Resolution Summary:\n"
-            "Dear Valued Customer,\n\n"
-            "Thank you for contacting [Company Name]. We appreciate you reaching out to us.\n\n"
-            "Regarding our damaged product policy: "
-            f"{policy_text}\n\n"
-            "If you would like us to investigate a specific order or request a replacement or refund, please provide your order number (format: ORD#####) and any photos of the damaged item. Once we have that information we can check order status, stock availability, and proceed with a replacement or refund if applicable.\n\n"
-            "Kind regards,\n"
-            "Customer Support Team\n"
-            "[Company Name]"
-        )
-
-        resolution_message = AIMessage(content=email_body)
-        return {
-            "messages": [*state.messages, resolution_message],
-            "action_taken": "Policy Info",
-            "reason": "Provided policy information without tool calls",
-            "reasoning": {**state.reasoning, "resolve": "Policy-only response (no tools used)"},
-            "thought_process": state.thought_process + [{
-                "step": "resolve_issue",
-                "reasoning": "Policy-only response",
-                "output": "Policy Info provided to customer"
-            }]
-        }
 
     # Create task description
     task = (
@@ -717,7 +617,6 @@ def resolve_issue(state: SupportAgentState):
         "messages": [*state.messages, *tool_messages, resolution_message],
         "action_taken": action,
         "reason": reason,
-        "email_reply": result_text,
         "reasoning": {**state.reasoning, "resolve": reasoning_summary},
         "thought_process": state.thought_process + [{
             "step": "resolve_issue",
@@ -725,4 +624,31 @@ def resolve_issue(state: SupportAgentState):
             "detailed_steps": formatted_reasoning,
             "output": f"{action} - {reason}"
         }]
+    }
+def prepare_email_reply(state: SupportAgentState):
+    """
+    This node extracts the final AI email response from the state
+    so the ambient Gmail consumer can send a reply.
+    """
+    # Find last assistant message
+    reply = None
+    for msg in reversed(state.messages):
+        if isinstance(msg, AIMessage) or msg.role in ("assistant", "ai"):
+            reply = msg.content
+            break
+
+    # If somehow no message, fallback
+    if not reply:
+        reply = (
+            "Thank you for contacting support. "
+            "We have received your request and will update you shortly."
+        )
+
+    return {
+        "email_reply": reply,
+        "messages": state.messages,
+        "action_taken": getattr(state, "action_taken", None),
+        "reason": getattr(state, "reason", None),
+        "reasoning": state.reasoning,
+        "thought_process": state.thought_process,
     }

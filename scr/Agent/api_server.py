@@ -1,5 +1,6 @@
+# api_server.py
 """
-FastAPI server for Customer Support Agent
+FastAPI server for Customer Support Agent + Ambient Gmail Integration
 """
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,8 +8,12 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 import uvicorn
-import uuid
-from sqlalchemy.orm import Session, joinedload
+
+from sqlalchemy.orm import Session
+
+# Import for async/threading
+from contextlib import asynccontextmanager
+import threading
 
 # Import graph components
 from graph import graph_app
@@ -17,26 +22,27 @@ from langchain_core.messages import HumanMessage
 
 # Import database components
 from database.ticket_db import get_db, save_ticket_state, Ticket, TicketState, SessionLocal
-from contextlib import asynccontextmanager
-import threading
-import time
-from mail_api import get_gmail_service, get_message_meta, notify_agent
+
 
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Lifespan context manager for FastAPI app.
-    Handles startup and shutdown events.
+    Start Gmail Ambient Agent (pub/sub) in background thread.
     """
-    # Startup: Launch Gmail listener in a separate thread
-    thread = threading.Thread(target=gmail_listener, daemon=True)
+    import asyncio
+    from mail_api import main as gmail_ambient_main
+
+    def run_ambient():
+        asyncio.run(gmail_ambient_main())
+
+    thread = threading.Thread(target=run_ambient, daemon=True)
     thread.start()
-    print("🚀 Gmail listener running in background.")
-    
+
+    print("🚀 Ambient Gmail pub/sub agent running.")
+
     yield
-    
-    # Shutdown: Cleanup if needed
+
     print("🛑 Shutting down...")
 
 # Create FastAPI app with lifespan
@@ -44,7 +50,7 @@ app = FastAPI(
     title="Customer Support Agent API",
     description="API for processing customer support tickets using LangGraph",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Add CORS middleware
@@ -56,12 +62,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Pydantic models for request and response
 class TicketRequest(BaseModel):
     ticket_id: str
     ticket_description: str
     customer_id: str
     received_date: datetime
+
 
 class TicketResponse(BaseModel):
     ticket_id: str
@@ -75,6 +83,7 @@ class TicketResponse(BaseModel):
     received_date: Optional[datetime] = None
     messages: Optional[List[Dict[str, Any]]] = None
 
+
 class TicketDetailResponse(TicketResponse):
     processed_date: Optional[datetime] = None
     policy_desc: Optional[str] = None
@@ -82,46 +91,44 @@ class TicketDetailResponse(TicketResponse):
     reasoning: Optional[Dict[str, Any]] = None
     thought_process: Optional[List[Dict[str, Any]]] = None
 
+
 # Process ticket in background
 def process_ticket_task(ticket_data: Dict[str, Any]):
     """
-    Process a ticket using the LangGraph workflow and save results to database
+    Process a ticket using the LangGraph workflow and save results to database.
+    Runs in a FastAPI BackgroundTask thread.
     """
     try:
         # Create initial state with customer message
         initial_state = SupportAgentState(
             messages=[HumanMessage(content=ticket_data["description"])]
         )
-        
-        # Execute the graph
+
+        # Execute the local graph (this uses your local StateGraph, not Agent Inbox)
         final_state = graph_app.invoke(initial_state)
-        
-        # Log the completion of the workflow
+
         print(f"Workflow completed for ticket {ticket_data['ticket_id']}")
         print(f"Final state: {final_state}")
-        
+
         # Handle different state object types
-        # If final_state is a dict-like object (AddableValuesDict)
-        if hasattr(final_state, 'get'):
-            # Extract relevant fields safely using get() method
-            problems = final_state.get('problems', [])
-            actions = final_state.get('actions', None)
+        if hasattr(final_state, "get"):
+            # Dict-like (e.g., AddableValuesDict)
+            problems = final_state.get("problems", [])
+            actions = final_state.get("actions", None)
             action_taken = actions[0] if isinstance(actions, list) and actions else None
-            messages = final_state.get('messages', [])
-            print(f"Problems identified: {problems}")
-            print(f"Action taken: {action_taken}")
+            messages = final_state.get("messages", [])
         else:
-            # Try to access attributes directly if it's an object with attributes
-            problems = getattr(final_state, 'problems', []) if hasattr(final_state, 'problems') else []
-            action_taken = getattr(final_state, 'action_taken', None) if hasattr(final_state, 'action_taken') else None
-            messages = getattr(final_state, 'messages', []) if hasattr(final_state, 'messages') else []
-            print(f"Problems identified: {problems}")
-            print(f"Action taken: {action_taken}")
-        
+            # Attribute-based state object
+            problems = getattr(final_state, "problems", []) if hasattr(final_state, "problems") else []
+            action_taken = getattr(final_state, "action_taken", None) if hasattr(final_state, "action_taken") else None
+            messages = getattr(final_state, "messages", []) if hasattr(final_state, "messages") else []
+
+        print(f"Problems identified: {problems}")
+        print(f"Action taken: {action_taken}")
+
         # Save ticket and state to database
         print(f"Saving ticket and state to database: {ticket_data}, {final_state}")
         try:
-            # Get a new database session for background task
             db_session = SessionLocal()
             try:
                 save_ticket_state(ticket_data, final_state, db_session)
@@ -129,25 +136,22 @@ def process_ticket_task(ticket_data: Dict[str, Any]):
                 db_session.close()
         except Exception as e:
             print(f"Error saving ticket state: {str(e)}")
-            # Continue execution even if saving to DB fails
-        
-        # Return the final state
+
         return final_state
     except Exception as e:
         print(f"Error processing ticket {ticket_data['ticket_id']}: {str(e)}")
-        # Re-raise the exception to be handled by the caller
         raise e
+
 
 @app.post("/tickets", response_model=TicketResponse)
 async def create_ticket(
     ticket: TicketRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
-    Create a new support ticket and process it asynchronously
+    Create a new support ticket and process it asynchronously via the local graph.
     """
-    # Debug logging
     print("\n=== RECEIVED TICKET REQUEST ===")
     print(f"ticket_id: {ticket.ticket_id}")
     print(f"ticket_description: {ticket.ticket_description[:50]}...")
@@ -161,59 +165,57 @@ async def create_ticket(
             return {
                 "ticket_id": ticket.ticket_id,
                 "status": "error",
-                "message": f"Ticket with ID {ticket.ticket_id} already exists"
+                "message": f"Ticket with ID {ticket.ticket_id} already exists",
             }
-            
+
         # Create a new ticket in the database with 'processing' status
         new_ticket = Ticket(
             ticket_id=ticket.ticket_id,
             customer_id=ticket.customer_id,
             description=ticket.ticket_description,
             received_date=ticket.received_date,
-            status="processing"
+            status="processing",
         )
         db.add(new_ticket)
         db.commit()
         print(f"New ticket created: {new_ticket}")
-        
+
         # Prepare ticket data for background processing
         ticket_data = {
             "ticket_id": ticket.ticket_id,
             "customer_id": ticket.customer_id,
             "description": ticket.ticket_description,
             "received_date": ticket.received_date,
-            "status": "processing"
+            "status": "processing",
         }
-        
-        # Add ticket processing to background tasks
+
+        # Process ticket asynchronously
         background_tasks.add_task(process_ticket_task, ticket_data)
-        
+
         return {
             "ticket_id": ticket.ticket_id,
             "status": "processing",
-            "message": "Ticket received and being processed. Check status later using GET /tickets/{ticket_id}"
+            "message": "Ticket received and being processed. Check status later using GET /tickets/{ticket_id}",
         }
     except Exception as e:
         db.rollback()
         return {
             "ticket_id": ticket.ticket_id,
             "status": "error",
-            "message": f"Error creating ticket: {str(e)}"
+            "message": f"Error creating ticket: {str(e)}",
         }
+
 
 @app.get("/tickets/{ticket_id}", response_model=TicketDetailResponse)
 async def get_ticket(ticket_id: str, db: Session = Depends(get_db)):
     """
-    Get ticket details by ticket ID
+    Get ticket details by ticket ID.
     """
-    # Query the database for the ticket
     ticket = db.query(Ticket).filter(Ticket.ticket_id == ticket_id).first()
-    
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
     try:
-        # Use a specific query that only selects columns that exist in the database
         ticket_state = db.query(
             TicketState.problems,
             TicketState.policy_name,
@@ -222,9 +224,9 @@ async def get_ticket(ticket_id: str, db: Session = Depends(get_db)):
             TicketState.reason,
             TicketState.reasoning,
             TicketState.thought_process,
-            TicketState.messages
+            TicketState.messages,
         ).filter(TicketState.ticket_id == ticket.id).first()
-        
+
         if not ticket_state:
             return {
                 "ticket_id": ticket.ticket_id,
@@ -234,11 +236,10 @@ async def get_ticket(ticket_id: str, db: Session = Depends(get_db)):
                 "description": ticket.description,
                 "received_date": ticket.received_date,
                 "processed_date": ticket.processed_date,
-                "messages": []  # Include empty messages array
+                "messages": [],
             }
-        
-        # Return full ticket details with state
-        response = {
+
+        return {
             "ticket_id": ticket.ticket_id,
             "status": ticket.status,
             "message": "Ticket processing complete",
@@ -253,14 +254,11 @@ async def get_ticket(ticket_id: str, db: Session = Depends(get_db)):
             "reason": ticket_state.reason,
             "reasoning": ticket_state.reasoning,
             "thought_process": ticket_state.thought_process,
-            "messages": ticket_state.messages if ticket_state.messages else []
+            "messages": ticket_state.messages if ticket_state.messages else [],
         }
-        return response
     except Exception as e:
         print(f"Error accessing ticket state data: {str(e)}")
-        db.rollback()  # Roll back the transaction to avoid cascading errors
-        
-        # Return basic ticket info without state data
+        db.rollback()
         return {
             "ticket_id": ticket.ticket_id,
             "status": ticket.status,
@@ -269,120 +267,52 @@ async def get_ticket(ticket_id: str, db: Session = Depends(get_db)):
             "description": ticket.description,
             "received_date": ticket.received_date,
             "processed_date": ticket.processed_date,
-            "messages": []  # Include empty messages array
+            "messages": [],
         }
+
 
 @app.get("/tickets", response_model=List[TicketResponse])
 async def list_tickets(db: Session = Depends(get_db)):
     """
-    List all tickets
+    List all tickets.
     """
     tickets = db.query(Ticket).all()
-    
-    result = []
+
+    result: List[TicketResponse] = []
     for ticket in tickets:
-        ticket_data = {
+        ticket_data: Dict[str, Any] = {
             "ticket_id": ticket.ticket_id,
             "status": ticket.status,
             "message": "Ticket found",
             "description": ticket.description,
-            "customer_id": ticket.customer_id
+            "customer_id": ticket.customer_id,
         }
-        
+
         try:
-            # Use a specific query that only selects columns that exist in the database
             ticket_state = db.query(
                 TicketState.problems,
                 TicketState.policy_name,
                 TicketState.action_taken,
-                TicketState.messages
+                TicketState.messages,
             ).filter(TicketState.ticket_id == ticket.id).first()
-            
+
             if ticket_state:
-                ticket_data.update({
-                    "problems": ticket_state.problems,
-                    "policy_name": ticket_state.policy_name,
-                    "action_taken": ticket_state.action_taken,
-                    "messages": ticket_state.messages if ticket_state.messages else []
-                })
+                ticket_data.update(
+                    {
+                        "problems": ticket_state.problems,
+                        "policy_name": ticket_state.policy_name,
+                        "action_taken": ticket_state.action_taken,
+                        "messages": ticket_state.messages if ticket_state.messages else [],
+                    }
+                )
         except Exception as e:
             print(f"Error accessing ticket state data: {str(e)}")
-            # Continue without state data
-            db.rollback()  # Roll back the transaction to avoid cascading errors
-            ticket_data["messages"] = []  # Ensure messages field is present even on error
-        
+            db.rollback()
+            ticket_data["messages"] = []
+
         result.append(ticket_data)
-    
+
     return result
-
-
-def gmail_listener():
-    """
-    Background thread that continuously polls Gmail and processes new support emails.
-    """
-    print("📨 Gmail listener started...")
-    service = get_gmail_service()
-    seen_ids = set()
-    config = {"poll_interval_seconds": 60}  # You can load your actual config.json if you want
-
-    while True:
-        try:
-            # Fetch unread emails from the last 24 hours
-            response = service.users().messages().list(
-                userId="me",
-                labelIds=["INBOX"],
-                q="is:unread newer_than:1d",
-                maxResults=5
-            ).execute()
-
-            messages = response.get("messages", [])
-            for msg in messages:
-                msg_id = msg.get("id")
-                if not msg_id:
-                    continue
-                
-                # Skip already-read messages (idempotent: re-running won't re-process)
-                from mail_api import is_message_unread, mark_message_as_read
-                if not is_message_unread(service, msg_id):
-                    continue
-                
-                # Skip messages we've already seen in this session
-                if msg_id in seen_ids:
-                    continue
-                
-                # Process the unread message
-                meta = get_message_meta(service, msg_id)
-                subject = meta.get("headers", {}).get("Subject")
-                sender = meta.get("headers", {}).get("From")
-
-                print(f"\n📩 New email detected: {subject}")
-
-                payload = {
-                    "id": msg_id,
-                    "from": sender,
-                    "subject": subject,
-                    "date": meta.get("headers", {}).get("Date"),
-                    "body": meta.get("body", ""),
-                }
-
-                # Process email and attempt to send reply if it's a support ticket
-                result = notify_agent(payload, config)
-                
-                # Only mark as read after successful reply (or if not a support ticket)
-                # This ensures failed sends can be retried on next poll
-                if result.get("status") == "processed":
-                    if mark_message_as_read(service, msg_id):
-                        seen_ids.add(msg_id)
-                    else:
-                        print(f"Warning: Failed to mark message {msg_id} as read, will retry")
-                else:
-                    print(f"Warning: Message {msg_id} processing failed, not marking as read to allow retry")
-
-            time.sleep(60)
-
-        except Exception as e:
-            print(f"Gmail listener error: {e}")
-            time.sleep(60)
 
 
 if __name__ == "__main__":

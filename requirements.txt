@@ -18,3 +18,5 @@ google-auth-oauthlib==1.2.0
 requests==2.31.0
 langgraph
 python-dotenv
+langgraph-sdk
+langsmith>=0.0.50

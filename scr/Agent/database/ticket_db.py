@@ -72,6 +72,7 @@ class TicketState(Base):
     reason = Column(Text, nullable=True)
     reasoning = Column(JSON, nullable=True)  # Dict of reasoning steps
     thought_process = Column(JSON, nullable=True)  # List of thought process steps
+    interrupt = Column(JSON, nullable=True)  # Interrupt information
     
     # Relationship
     ticket = relationship("Ticket", back_populates="state_data")
@@ -268,6 +269,7 @@ def save_ticket_state(ticket_data, state_data, db):
             existing_state.reason = reason
             existing_state.reasoning = reasoning
             existing_state.thought_process = json.loads(json.dumps(thought_process, default=str))
+            existing_state.interrupt = ticket_data.get('interrupt')
         else:
             # Create new ticket state
             print(f"\n\nnot updating and Creating new ticket state: {ticket.to_dict()}\n\n")
@@ -282,7 +284,8 @@ def save_ticket_state(ticket_data, state_data, db):
                     action_taken=action_taken,
                     # reason=reason,
                     reasoning=reasoning,
-                    thought_process=json.loads(json.dumps(thought_process, default=str))  # Handle serialization
+                    thought_process=json.loads(json.dumps(thought_process, default=str)),  # Handle serialization
+                    interrupt=ticket_data.get('interrupt')
                 )
                 print(f"Ticket state created in save_ticket_state: {ticket_state.to_dict()}")
 
