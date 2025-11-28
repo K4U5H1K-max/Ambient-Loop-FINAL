@@ -9,6 +9,7 @@ from langchain_core.tools import tool as create_tool
 import json
 from typing import Dict, Any, List, Optional
 from database.policies import format_policies_for_llm, get_policies_for_problem
+from database.data import ORDERS
 from difflib import get_close_matches
 from dotenv import load_dotenv
 load_dotenv()
@@ -83,7 +84,7 @@ Response format:
     is_support = "\"is_support_ticket\": true" in response.content.strip().lower()
     if is_support:
         order_id = "\"has_order_id\": true" in response.content.lower()
-        if order_id:
+        if order_id in ORDERS.keys():
             products_context = get_products_context()
             print(f"Loaded products context: {len(products_context)} chars")
             return {
