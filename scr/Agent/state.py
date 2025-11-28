@@ -7,6 +7,7 @@ class SupportAgentState(BaseModel):
     messages: Annotated[List[BaseMessage], add_messages] = []
     #add a issue classifier
     is_support_ticket: bool = False# default to false for support ticket it is going to be over written to true when classified in validation node
+    order_id: Optional[str] = None
     products_cache: Optional[str] = None  # Preloaded products context
     problems: List[str] = []
     #query issue classification

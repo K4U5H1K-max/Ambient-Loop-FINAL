@@ -14,6 +14,7 @@ from difflib import get_close_matches
 from dotenv import load_dotenv
 load_dotenv()
 from database.memory import get_policies_context, get_products_context
+import re
 
 # Custom callback handler to capture agent reasoning
 class ReasoningCaptureHandler(BaseCallbackHandler):
@@ -47,6 +48,12 @@ class PolicySelection(BaseModel):
     reasoning: str = Field(description="Detailed reasoning for selecting this policy based on the customer issue and problem types")
     application_notes: Optional[str] = Field(description="Specific notes on how to apply this policy to the current situation", default=None)
 
+# Add this near the top with other Pydantic models
+class TicketValidation(BaseModel):
+    is_support_ticket: bool = Field(description="Whether this is a customer support ticket")
+    has_order_id: bool = Field(description="Whether an order ID is present in the message")
+    extracted_order_id: Optional[str] = Field(description="The extracted order ID if present (format: ORD#####)", default=None)
+
 # Initialize LLM
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
@@ -65,44 +72,54 @@ def validate_and_load_context(state: SupportAgentState):
     if not user_message:
         return {"is_support_ticket": False}
     
-    # Use LLM to classify if this is a support ticket
-    classification_prompt = f"""Determine if the following message is a customer support ticket (order issues, product questions, complaints, refunds, etc.).
-    
+    # Use structured LLM output
+    classification_prompt = f"""Analyze this customer message and extract:
+1. Whether it's a support ticket (order issues, product problems, complaints, refunds, etc.)
+2. Whether an order ID is present (format: ORD##### where # is a digit)
+3. The exact order ID if present
+
 Message: {user_message}
 
-Respond with only 'YES' if it's a support ticket, or 'NO' if it's spam, gibberish, or unrelated.
+Respond with structured JSON."""
 
-if the ticket is classified as a support ticket check for the order ID and return a boolean flag indicating its presence.
-and if it is a support and has order ID preload the products context from the products memory store.
-Stricly adhere to the response fromat given below
-Response format:
-"is_support_ticket": true or false",
-"has_order_id": true or false,
-"products_cache": preloaded products context here if applicable else null
-"""
-    response = llm.invoke(classification_prompt)
-    is_support = "\"is_support_ticket\": true" in response.content.strip().lower()
-    if is_support:
-        order_id = "\"has_order_id\": true" in response.content.lower()
-        if order_id in ORDERS.keys():
+    structured_llm = llm.with_structured_output(TicketValidation)
+    response = structured_llm.invoke([HumanMessage(content=classification_prompt)])
+    
+    if not response.is_support_ticket:
+        print("Not a support ticket - ending workflow")
+        return {"is_support_ticket": False}
+    
+    # Support ticket confirmed
+    if response.has_order_id and response.extracted_order_id:
+        order_id_upper = response.extracted_order_id.upper()
+        
+        # Validate order exists
+        if order_id_upper in ORDERS.keys():
             products_context = get_products_context()
+            print(f"✅ Valid order ID: {order_id_upper}")
             print(f"Loaded products context: {len(products_context)} chars")
             return {
                 "is_support_ticket": True,
                 "has_order_id": True,
+                "order_id": order_id_upper,
                 "products_cache": products_context
             }
         else:
+            print(f"⚠️ Order ID {order_id_upper} not found in database")
             return {
                 "is_support_ticket": True,
                 "has_order_id": False,
+                "order_id": None,
                 "products_cache": None
             }
     else:
-        print("Not a support ticket - ending workflow")
-        return {"is_support_ticket": False}
-
-
+        print("No order ID found in message")
+        return {
+            "is_support_ticket": True,
+            "has_order_id": False,
+            "order_id": None,
+            "products_cache": None
+        }
 def tier_classifier(state: SupportAgentState):
     issue_text = state.messages[0].content
     
