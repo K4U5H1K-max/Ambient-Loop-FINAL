@@ -765,6 +765,7 @@ async def process_email_event(event: Dict[str, Any], service):
         )
 
         if success:
+            print('OHH NOOO!!! Mail is sent')
             mark_message_as_read(service, msg_id)
             set_message_status(
                 msg_id,

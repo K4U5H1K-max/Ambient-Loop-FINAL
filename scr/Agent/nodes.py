@@ -654,30 +654,26 @@ def resolve_issue(state: SupportAgentState):
                     if resp["type"] == "accept":
                         pass # Do nothing, proceed to tool call, let it get executed
                     elif resp["type"] == "ignore":
-                        # Create denial message
-                        denial_message = AIMessage(
-                            content=(
-                                "❌ **Action Denied by Human Reviewer**\n\n"
-                                f"The requested action `{tool_name}` was not approved and cannot proceed.\n\n"
-                                "This ticket requires manual review by a supervisor."
-                            )
+                        # Log the denial but don't add to messages (prevents email extraction)
+                        print(
+                            f"Action {tool_name} denied by human reviewer for order {tool_input.get('order_id')}. Stopping resolution."
                         )
                         
-                        # Immediately return with denial state (stops execution)
+                        # Return with denial state WITHOUT adding denial message
                         return {
-                            "messages": [*state.messages, *tool_messages, denial_message],
+                            "messages": [*state.messages, *tool_messages],  # Don't include denial_message
                             "action_taken": "Action Denied",
                             "reason": f"Human denied {tool_name} action",
-                            "email_reply": None,  # ⬅️ Critical: Set to None to prevent email sending
+                            "email_reply": None,  # ⬅️ Explicitly set to None
                             "requires_human_review": True,
                             "reasoning": {
-                                **state.reasoning, 
-                                "resolve": f"{tool_name} denied by human - execution stopped"
+                                **state.reasoning,
+                                "resolve": f"{tool_name} denied by human - requires supervisor review"
                             },
                             "thought_process": state.thought_process + [{
                                 "step": "resolve_issue",
-                                "reasoning": f"Critical action {tool_name} was denied",
-                                "output": "Execution stopped - requires supervisor review"
+                                "reasoning": f"Critical action {tool_name} was denied by human",
+                                "output": "Execution stopped - requires supervisor intervention"
                             }]
                         }
                 
