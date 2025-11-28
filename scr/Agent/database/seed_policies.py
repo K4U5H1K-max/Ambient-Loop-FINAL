@@ -7,6 +7,14 @@ from policies import get_all_policies
 
 def seed_policies_from_py():
     session = get_session()
+    
+    # Check if already seeded
+    existing_count = session.query(Policy).count()
+    if existing_count > 0:
+        print(f"↩️ Policies already seeded ({existing_count} policies exist). Skipping.")
+        session.close()
+        return
+    
     policies = get_all_policies()
 
     for name, details in policies.items():

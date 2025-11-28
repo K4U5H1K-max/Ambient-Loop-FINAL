@@ -637,14 +637,32 @@ def resolve_issue(state: SupportAgentState):
                     if resp["type"] == "accept":
                         pass # Do nothing, proceed to tool call, let it get executed
                     elif resp["type"] == "ignore":
-                        messages.append(
-                            ToolMessage(
-                                name=tool_name,
-                                content="ACTION_DENIED_BY_HUMAN_REQUEST",
-                                tool_call_id=tool_call["id"]
+                        # Create denial message
+                        denial_message = AIMessage(
+                            content=(
+                                "❌ **Action Denied by Human Reviewer**\n\n"
+                                f"The requested action `{tool_name}` was not approved and cannot proceed.\n\n"
+                                "This ticket requires manual review by a supervisor."
                             )
                         )
-                        continue  # Skip this tool call
+                        
+                        # Immediately return with denial state (stops execution)
+                        return {
+                            "messages": [*state.messages, *tool_messages, denial_message],
+                            "action_taken": "Action Denied",
+                            "reason": f"Human denied {tool_name} action",
+                            "email_reply": None,  # ⬅️ Critical: Set to None to prevent email sending
+                            "requires_human_review": True,
+                            "reasoning": {
+                                **state.reasoning, 
+                                "resolve": f"{tool_name} denied by human - execution stopped"
+                            },
+                            "thought_process": state.thought_process + [{
+                                "step": "resolve_issue",
+                                "reasoning": f"Critical action {tool_name} was denied",
+                                "output": "Execution stopped - requires supervisor review"
+                            }]
+                        }
                 
                 # Execute the tool
                 tool_func = None

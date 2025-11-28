@@ -68,6 +68,15 @@ def seed_policy_memory(db: Session, store):
     """Seed LangMem from existing policies stored in the database."""
     from database.ticket_db import Policy
     
+    # Check if already seeded
+    try:
+        existing_items = list(store.search(("policies",), limit=1))
+        if existing_items:
+            print(f"↩️ Policy memory already seeded. Skipping.")
+            return
+    except Exception:
+        pass  # Store might be empty or not initialized
+    
     policies = db.query(Policy).all()
     for policy in policies:
         store.put(
@@ -85,6 +94,15 @@ def seed_policy_memory(db: Session, store):
 def seed_product_memory(db: Session, store):
     """Load all product metadata into LangMem."""
     from database.ticket_db import Product
+    
+    # Check if already seeded
+    try:
+        existing_items = list(store.search(("products",), limit=1))
+        if existing_items:
+            print(f"↩️ Product memory already seeded. Skipping.")
+            return
+    except Exception:
+        pass  # Store might be empty or not initialized
     
     products = db.query(Product).all()
     for product in products:

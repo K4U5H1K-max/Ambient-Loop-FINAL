@@ -15,26 +15,7 @@ from database.memory import (
     get_product_memory,
     seed_product_memory,
 )
-from database.ticket_db import SessionLocal, create_tables
-from database.seed_policies import seed_policies_from_py
-from database.seed_products import seed_products
-
-db = SessionLocal()
-
-try:
-    create_tables()
-    seed_policies_from_py()
-    seed_products()
-except Exception as e:
-    print(f"[graph.py] DB setup/seeding warning: {e}")
-
-try:
-    with get_policy_memory() as policy_store:
-        seed_policy_memory(db, policy_store)
-    with get_product_memory() as product_store:
-        seed_product_memory(db, product_store)
-except Exception as e:
-    print(f"[graph.py] Store seeding warning: {e}")
+# Database session removed - seeding handled by init_db.py
 
 def route_after_validation(state: SupportAgentState):
     return "tier_classification" if state.is_support_ticket else END

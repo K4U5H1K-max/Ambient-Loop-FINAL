@@ -652,9 +652,6 @@ async def process_email_event(event: Dict[str, Any], service):
         )
 
         if created_thread_id and created_thread_id != langgraph_thread_id:
-            logging.info(
-                f"Using LangGraph thread id {created_thread_id} (mapped from requested {langgraph_thread_id})"
-            )
             langgraph_thread_id = created_thread_id
             set_message_status(
                 msg_id,
@@ -685,39 +682,11 @@ async def process_email_event(event: Dict[str, Any], service):
                 data = chunk.data
                 if "__interrupt__" in data:
                     interrupt_detected = True
-                    logging.info(
-                        f"Interrupt detected for msg_id={msg_id}: {data['__interrupt__']}"
-                    )
-                    try:
-                        thread_state = await client.threads.get_state(thread_id=langgraph_thread_id)
-                        try:
-                            dump = json.dumps(thread_state, default=str)
-                            logging.info(
-                                f"Full thread_state (truncated 8k) for interrupted msg_id={msg_id}: {dump[:8192]}"
-                            )
-                        except Exception:
-                            logging.info(
-                                f"Interrupted thread_state for msg_id={msg_id} (non-serializable)"
-                            )
-                    except Exception as e:
-                        logging.info(
-                            f"Failed to fetch thread_state for interrupted msg_id={msg_id}: {e}"
-                        )
+                    logging.info(f"Interrupt detected for msg_id={msg_id}")
                     break
 
-        record = get_message_record(msg_id) or {}
-        set_message_status(
-            msg_id,
-            gmail_thread_id=gmail_thread_id,
-            langgraph_thread_id=langgraph_thread_id,
-            status="awaiting_human" if interrupt_detected else record.get("status", "processing"),
-            last_run_id=last_run_id,
-        )
-
         if interrupt_detected:
-            logging.info(
-                f"Run interrupted for msg_id={msg_id}; waiting for Agent Inbox decision."
-            )
+            logging.info(f"Run interrupted for msg_id={msg_id}; waiting for Agent Inbox decision.")
             set_message_status(
                 msg_id,
                 gmail_thread_id=gmail_thread_id,
@@ -731,23 +700,43 @@ async def process_email_event(event: Dict[str, Any], service):
         thread_state = await client.threads.get_state(thread_id=langgraph_thread_id)
 
         if not thread_state_has_resolution(thread_state):
-            logging.warning(
-                f"No clear resolution yet for msg_id={msg_id} "
-                f"(but no interrupts). Skipping reply this cycle."
-            )
+            logging.warning(f"No clear resolution yet for msg_id={msg_id}")
             return
+
+        # ⬇️ CHECK IF EMAIL SHOULD BE SENT ⬇️
+        values = thread_state.get("values", {})
+        email_reply = values.get("email_reply")
+        requires_human_review = values.get("requires_human_review", False)
+        action_taken = values.get("action_taken")
+        
+        # Don't send email if action was denied
+        if email_reply is None or requires_human_review or action_taken == "Action Denied":
+            logging.info(
+                f"⛔ Skipping email send for msg_id={msg_id}: "
+                f"Action was denied or requires human review. "
+                f"(email_reply={email_reply is not None}, "
+                f"requires_human={requires_human_review}, "
+                f"action={action_taken})"
+            )
+            set_message_status(
+                msg_id,
+                gmail_thread_id=gmail_thread_id,
+                langgraph_thread_id=langgraph_thread_id,
+                status="action_denied",  # Custom status
+                last_run_id=last_run_id,
+            )
+            # DO NOT mark as read - keep unread for supervisor attention
+            return
+        # ⬆️ END CHECK ⬆️
 
         reply_text = extract_reply_from_thread_state(thread_state)
         if not reply_text:
-            logging.warning(
-                f"Could not extract reply text from thread_state for msg_id={msg_id}"
-            )
+            logging.warning(f"Could not extract reply text for msg_id={msg_id}")
             return
 
-        # Save into PostgreSQL (reusing ticket_db logic)
+        # Save to PostgreSQL
         try:
             from database.ticket_db import SessionLocal, save_ticket_state
-
             db = SessionLocal()
             try:
                 save_ticket_state(
@@ -756,9 +745,8 @@ async def process_email_event(event: Dict[str, Any], service):
                         "customer_id": email_meta.get("from"),
                         "description": email_meta.get("body"),
                         "received_date": datetime.utcnow().isoformat(),
-                        "interrupt": None,
                     },
-                    thread_state.get("values", {}),
+                    values,
                     db,
                 )
             finally:
@@ -785,12 +773,12 @@ async def process_email_event(event: Dict[str, Any], service):
                 status="completed",
                 last_run_id=last_run_id,
             )
+            logging.info(f"✅ Email sent and marked read for msg_id={msg_id}")
         else:
-            logging.error(f"Failed to send reply for msg_id={msg_id}")
+            logging.error(f"❌ Failed to send reply for msg_id={msg_id}")
 
     except Exception as e:
-        logging.error(f"Error while processing msg_id={msg_id}: {e}")
-
+        logging.error(f"Error processing msg_id={msg_id}: {e}")
     finally:
         try:
             incoming_email_queue.task_done()

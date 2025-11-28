@@ -6,6 +6,14 @@ from database.data import PRODUCTS
 def seed_products():
     """Populate the products table using entries from data.py."""
     session = get_session()
+    
+    # Check if already seeded
+    existing_count = session.query(Product).count()
+    if existing_count > 0:
+        print(f"↩️ Products already seeded ({existing_count} products exist). Skipping.")
+        session.close()
+        return
+    
     print("🌱 Seeding products...")
 
     for product_id, product_data in PRODUCTS.items():
