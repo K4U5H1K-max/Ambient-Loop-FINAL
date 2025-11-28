@@ -25,3 +25,5 @@ class SupportAgentState(BaseModel):
     reasoning: Dict[str, str] = {}
     # Track agent's thought process
     thought_process: List[Dict[str, Any]] = []
+    #Checking for Order ID
+    has_order_id: bool = False

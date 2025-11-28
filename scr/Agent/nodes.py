@@ -69,19 +69,34 @@ def validate_and_load_context(state: SupportAgentState):
     
 Message: {user_message}
 
-Respond with only 'YES' if it's a support ticket, or 'NO' if it's spam, gibberish, or unrelated."""
-    
+Respond with only 'YES' if it's a support ticket, or 'NO' if it's spam, gibberish, or unrelated.
+
+if the ticket is classified as a support ticket check for the order ID and return a boolean flag indicating its presence.
+and if it is a support and has order ID preload the products context from the products memory store.
+Stricly adhere to the response fromat given below
+Response format:
+"is_support_ticket": true or false",
+"has_order_id": true or false,
+"products_cache": preloaded products context here if applicable else null
+"""
     response = llm.invoke(classification_prompt)
-    is_support = response.content.strip().upper() == "YES"
-    
+    is_support = "\"is_support_ticket\": true" in response.content.strip().lower()
     if is_support:
-        # Preload products context
-        products_context = get_products_context()
-        print(f"Loaded products context: {len(products_context)} chars")
-        return {
-            "is_support_ticket": True,
-            "products_cache": products_context
-        }
+        order_id = "\"has_order_id\": true" in response.content.lower()
+        if order_id:
+            products_context = get_products_context()
+            print(f"Loaded products context: {len(products_context)} chars")
+            return {
+                "is_support_ticket": True,
+                "has_order_id": True,
+                "products_cache": products_context
+            }
+        else:
+            return {
+                "is_support_ticket": True,
+                "has_order_id": False,
+                "products_cache": None
+            }
     else:
         print("Not a support ticket - ending workflow")
         return {"is_support_ticket": False}
@@ -497,37 +512,37 @@ def resolve_issue(state: SupportAgentState):
     # SHORT-CIRCUIT: if this is a general policy/query request (no actionable order),
     # do NOT call tools. Instead, return a policy-only informational email.
     query_issue_flag = getattr(state, "query_issue", None)
-    problems_lower = ", ".join(state.problems).lower() if getattr(state, "problems", None) else ""
-    if query_issue_flag == "query" or "general" in problems_lower or not state.problems:
-        policies_context = get_policies_context()
-        policy_text = state.policy_desc or policies_context or (
-            "Damaged Item Policy: If a customer receives a damaged or defective item, they are eligible for an immediate replacement or full refund, including shipping costs."
-        )
+    #problems_lower = ", ".join(state.problems).lower() if getattr(state, "problems", None) else ""
+    # if query_issue_flag == "query" or "general" :
+    #     policies_context = get_policies_context()
+    #     policy_text = state.policy_desc or policies_context or (
+    #         "Damaged Item Policy: If a customer receives a damaged or defective item, they are eligible for an immediate replacement or full refund, including shipping costs."
+    #     )
 
-        email_body = (
-            "Resolution Summary:\n"
-            "Dear Valued Customer,\n\n"
-            "Thank you for contacting [Company Name]. We appreciate you reaching out to us.\n\n"
-            "Regarding our damaged product policy: "
-            f"{policy_text}\n\n"
-            "If you would like us to investigate a specific order or request a replacement or refund, please provide your order number (format: ORD#####) and any photos of the damaged item. Once we have that information we can check order status, stock availability, and proceed with a replacement or refund if applicable.\n\n"
-            "Kind regards,\n"
-            "Customer Support Team\n"
-            "[Company Name]"
-        )
+        # email_body = (
+        #     "Resolution Summary:\n"
+        #     "Dear Valued Customer,\n\n"
+        #     "Thank you for contacting [Company Name]. We appreciate you reaching out to us.\n\n"
+        #     "Regarding our damaged product policy: "
+        #     f"{policy_text}\n\n"
+        #     "If you would like us to investigate a specific order or request a replacement or refund, please provide your order number (format: ORD#####) and any photos of the damaged item. Once we have that information we can check order status, stock availability, and proceed with a replacement or refund if applicable.\n\n"
+        #     "Kind regards,\n"
+        #     "Customer Support Team\n"
+        #     "[Company Name]"
+        # )
 
-        resolution_message = AIMessage(content=email_body)
-        return {
-            "messages": [*state.messages, resolution_message],
-            "action_taken": "Policy Info",
-            "reason": "Provided policy information without tool calls",
-            "reasoning": {**state.reasoning, "resolve": "Policy-only response (no tools used)"},
-            "thought_process": state.thought_process + [{
-                "step": "resolve_issue",
-                "reasoning": "Policy-only response",
-                "output": "Policy Info provided to customer"
-            }]
-        }
+        # resolution_message = AIMessage(content=email_body)
+        # return {
+        #     "messages": [*state.messages, resolution_message],
+        #     "action_taken": "Policy Info",
+        #     "reason": "Provided policy information without tool calls",
+        #     "reasoning": {**state.reasoning, "resolve": "Policy-only response (no tools used)"},
+        #     "thought_process": state.thought_process + [{
+        #         "step": "resolve_issue",
+        #         "reasoning": "Policy-only response",
+        #         "output": "Policy Info provided to customer"
+        #     }]
+        # }
 
     # Create task description
     task = (
@@ -536,8 +551,10 @@ def resolve_issue(state: SupportAgentState):
         f"Identified problem types: {problems_str}\n"
         f"Company policy: {policy_info}\n\n"
         f"Product Memory Context (from store):\n{products_context}\n\n"
+        f"Query/Issue Classification: {query_issue_flag}\n\n"
+        f"Has Order ID: {state.has_order_id}\n\n"
         f"Instructions:\n"
-        f"1. Extract order ID (format: ORD#####).\n"
+        f"1. Extract order ID (format: ORD#####) only if has_order_id is True.\n"
         f"2. Use tools as needed. Do not fabricate data not shown.\n"
         f"3. Choose resend vs refund based strictly on stock availability and policy guidance.\n"
         f"4. Keep reasoning concise but stepwise.\n"
