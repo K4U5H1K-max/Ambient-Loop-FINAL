@@ -1,46 +1,115 @@
-# Ambient Agent — Gmail trigger (polling)
+# Ambient Loop — Gmail‑Driven Customer Support Agent
 
-This small project polls the Gmail API for unread messages and notifies an ambient agent when a new message arrives.
+This project is a LangGraph-based customer support agent that reacts to Gmail messages, triages tickets with an LLM, and records state in a PostgreSQL database. It is designed for local development with LangGraph Studio and a FastAPI backend.
 
-Files created
-- `mail_api.py` — Gmail poller and notifier
-- `requirements.txt` — Python dependencies
-- `config.json` — Poll interval and webhook config (sample)
-- `.gitignore` — ignores local tokens and secrets
+## Project Structure
 
-Quick start
+- `agent/` – LangGraph agent implementation
+   - `graph.py` – builds and exposes the `customer_support_agent` graph (`graph_app`)
+   - `nodes.py` – node functions (validate, classify, policy selection, resolve, etc.)
+   - `state.py` – `SupportAgentState` definition and graph state helpers
+   - `tools.py` – tool functions the graph can call (ERP, stock checks, resend/refund initializers, etc.)
+   - `prompts.py` – all core system prompts and instruction templates
 
-1. Set up Google OAuth credentials
-   - Go to https://console.cloud.google.com/apis/credentials
-   - Create an OAuth 2.0 Client ID (Application type: Desktop app)
-   - Download the JSON and save it as `credentials.json` in the project root (`AmbientAgent`)
+- `api/` – HTTP API
+   - `server.py` – FastAPI app for ticket operations and (optionally) Gmail push endpoints
 
-2. Install dependencies
-   - It's recommended to use a virtualenv. In PowerShell:
+- `config/` – LangGraph configuration
+   - `langgraph.json` – maps the graph id `customer_support_agent` to `./graph.py:graph_app`
+   - `graph.py` – thin wrapper that adjusts `sys.path` and re-exports `graph_app` from `agent.graph` for `langgraph dev`
+
+- `data/` – persistence and domain data
+   - `ticket_db.py` – SQLAlchemy models, session, and helpers for ticket state
+   - `data.py` – in-memory product/order data used by tools and tests
+   - `service.py` – ERP-style service wrapper over `data.py`
+   - `policies.py` – policy definitions / rules used during resolution
+   - `memory.py` – helpers for loading and persisting conversational context
+
+- `integration/`
+   - `mail_api.py` – Gmail integration (watch/history processing, unread detection, agent notification)
+
+- `tests/`
+   - `test_api.py` – API behavior
+   - `test_erp_integration.py` – ERP and tool layer
+   - `test_mail_read_status.py` – Gmail read/unread helpers
+   - `test_messages.py` – ticket + message state interactions
+
+- Root
+   - `README.md` – this file
+   - `requirements.txt` – Python dependencies
+
+## Prerequisites
+
+- Python 3.10+
+- A PostgreSQL instance (local or remote)
+- Google Cloud project with Gmail API enabled and OAuth credentials
+- LangGraph CLI installed (`pip install langgraph-cli`)
+
+## Setup
+
+1. Create and activate a virtual environment
 
 ```powershell
-python -m venv .venv; .\.venv\Scripts\Activate.ps1
+python -m venv venv
+./venv/Scripts/Activate.ps1
+```
+
+2. Install dependencies
+
+```powershell
 pip install -r requirements.txt
 ```
 
-3. Configure
-   - Edit `config.json`:
-     - `poll_interval_seconds` — seconds between polls (default 30)
-     - `notify_via_webhook` — set to `true` to POST JSON notifications
-     - `webhook_url` — your ambient agent endpoint (e.g. `http://localhost:8000/notify`)
+3. Configure environment
 
-4. Run
+- Copy your OpenAI and LangSmith keys into environment variables if needed (e.g. `OPENAI_API_KEY`, `LANGCHAIN_API_KEY`).
+- Ensure your PostgreSQL connection URL is configured wherever `data/ticket_db.py` expects it (commonly via an environment variable or a DSN string inside that module).
+
+4. Configure Gmail
+
+- Create OAuth credentials in the Google Cloud Console (Desktop application).
+- Download the JSON and save it as `credentials.json` in `scr/Agent` (or wherever `integration/mail_api.py` expects it in your current setup).
+- On first run of the Gmail flow, a browser window will open; consent will be stored in a local token file.
+
+> Note: This repo has evolved from a simple polling script into a modular LangGraph + FastAPI application. Some legacy references to polling may remain in comments; the active integration is via the modules listed above.
+
+## Running the LangGraph Dev Server
+
+From the `config` directory:
 
 ```powershell
-python main.py
+cd config
+langgraph dev
 ```
 
-On first run a browser window will open to authorize the Gmail account. A token will be stored in `token.pickle`.
+This starts a local dev server that:
 
-Behaviour notes
-- This implementation uses short-interval polling and is intended for local/dev use.
-- For production or scale, use Gmail push notifications (Cloud Pub/Sub) and a verified HTTPS endpoint. I can help implement that if you want.
+- Registers the `customer_support_agent` graph from `config/graph.py`.
+- Opens LangGraph Studio pointing at `http://127.0.0.1:2024`.
 
-Next steps I can do for you
-- Implement push-based notifications using Gmail Watch + Google Cloud Pub/Sub and a small HTTP endpoint to receive notifications.
-- Add an example ambient agent receiver endpoint (Flask/Express) to test end-to-end.
+You can now create threads and runs in Studio and watch the graph execute nodes like `validate`, `tier_classification`, `query_issue_classification`, `classify`, `policy`, and `resolve`.
+
+## Running the FastAPI Server
+
+From the project root:
+
+```powershell
+uvicorn api.server:app --reload
+```
+
+Then open `http://127.0.0.1:8000/docs` for the interactive docs. The API can be used for ticket creation, status checks, and as a receiver for Gmail-triggered events depending on how `integration/mail_api.py` is wired.
+
+## Tests
+
+Run tests from the project root:
+
+```powershell
+pytest
+```
+
+This exercises the core agent state, ERP integration, mail utilities, and API wiring.
+
+## Notes
+
+- All new code should import from the modular packages (`agent.*`, `data.*`, `integration.*`, `api.*`) rather than the old `scr/Agent` or `database` paths.
+- If you add new tools or nodes, keep prompts centralized in `agent/prompts.py` and data/logic in `data/` where appropriate.

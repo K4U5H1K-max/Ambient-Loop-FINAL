@@ -1,3 +1,7 @@
+# Ambient Loop Requirements
+# System prompts and config now centralized in scr/Agent/prompts.py
+# Project structure is being reorganized to split API, agent, data, and integration modules.
+
 langchain>=0.1.0
 langchain-core>=0.1.10
 langchain-openai>=0.0.5

@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, END, START
-from state import SupportAgentState
-from nodes import (
+from agent.state import SupportAgentState
+from agent.nodes import (
     validate_and_load_context,
     tier_classifier,
     query_issue_classifier,
@@ -9,7 +9,7 @@ from nodes import (
     resolve_issue,
 )
 
-from database.memory import (
+from data.memory import (
     get_policy_memory,
     seed_policy_memory,
     get_product_memory,

@@ -9,13 +9,7 @@ Tests:
 """
 import unittest
 from unittest.mock import Mock, patch, MagicMock
-import sys
-import os
-
-# Add parent directory to path to import mail_api
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scr', 'Agent'))
-
-from mail_api import is_message_unread, mark_message_as_read, notify_agent
+from integration.mail_api import is_message_unread, mark_message_as_read, notify_agent
 
 
 class TestMailReadStatus(unittest.TestCase):
@@ -87,9 +81,9 @@ class TestMailReadStatus(unittest.TestCase):
         result = mark_message_as_read(self.mock_service, self.test_msg_id)
         self.assertFalse(result, "Should return False on failure")
     
-    @patch('mail_api.graph_app')
-    @patch('mail_api.send_email')
-    @patch('mail_api.get_gmail_service')
+    @patch('integration.mail_api.graph_app')
+    @patch('integration.mail_api.send_email')
+    @patch('integration.mail_api.get_gmail_service')
     def test_notify_agent_success_marks_for_read(self, mock_get_service, mock_send_email, mock_graph_app):
         """Test that notify_agent returns success status when reply is sent."""
         # Mock graph_app to return a support ticket with response
@@ -114,9 +108,9 @@ class TestMailReadStatus(unittest.TestCase):
         self.assertTrue(result["reply_sent"], "Should indicate reply was sent")
         mock_send_email.assert_called_once()
     
-    @patch('mail_api.graph_app')
-    @patch('mail_api.send_email')
-    @patch('mail_api.get_gmail_service')
+    @patch('integration.mail_api.graph_app')
+    @patch('integration.mail_api.send_email')
+    @patch('integration.mail_api.get_gmail_service')
     def test_notify_agent_send_failure_returns_error(self, mock_get_service, mock_send_email, mock_graph_app):
         """Test that notify_agent returns error status when send fails."""
         # Mock graph_app to return a support ticket with response
@@ -139,7 +133,7 @@ class TestMailReadStatus(unittest.TestCase):
         self.assertEqual(result["status"], "error", "Should return error status on send failure")
         self.assertIn("error", result, "Should include error message")
     
-    @patch('mail_api.graph_app')
+    @patch('integration.mail_api.graph_app')
     def test_notify_agent_non_support_ticket_returns_processed(self, mock_graph_app):
         """Test that notify_agent returns processed status for non-support tickets."""
         # Mock graph_app to return a non-support ticket

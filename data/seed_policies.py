@@ -1,8 +1,8 @@
 """
 Seed PostgreSQL database with policies defined in policies.py
 """
-from database.ticket_db import Policy
-from database.ticket_db import get_session
+from data.ticket_db import Policy
+from data.ticket_db import get_session
 from policies import get_all_policies
 
 def seed_policies_from_py():

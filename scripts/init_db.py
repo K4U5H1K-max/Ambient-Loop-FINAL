@@ -1,10 +1,10 @@
 """
 Initialize the PostgreSQL database tables for the support ticket system
 """
-from database.ticket_db import create_tables, SessionLocal
-from database.seed_policies import seed_policies_from_py
-from database.seed_products import seed_products
-from database.memory import get_policy_memory, get_product_memory, seed_policy_memory, seed_product_memory
+from data.ticket_db import create_tables, SessionLocal
+from data.seed_policies import seed_policies_from_py
+from data.seed_products import seed_products
+from data.memory import get_policy_memory, get_product_memory, seed_policy_memory, seed_product_memory
 from langgraph.store.postgres import PostgresStore
 import os
 from dotenv import load_dotenv

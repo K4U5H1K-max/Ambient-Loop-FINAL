@@ -19,12 +19,12 @@ from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 
 # Graph components (for manual ticket creation)
-from graph import graph_app
-from state import SupportAgentState
+from agent.graph import graph_app
+from agent.state import SupportAgentState
 from langchain_core.messages import HumanMessage
 
 # Database components
-from database.ticket_db import get_db, save_ticket_state, Ticket, TicketState, SessionLocal
+from data.ticket_db import get_db, save_ticket_state, Ticket, TicketState, SessionLocal
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
     On startup:
       - Launch Gmail push workers (email_worker + human_resolution_monitor)
     """
-    from mail_api import email_worker, human_resolution_monitor, get_gmail_service
+    from integration.mail_api import email_worker, human_resolution_monitor, get_gmail_service
 
     service = get_gmail_service()
     loop = asyncio.get_event_loop()
@@ -105,7 +105,7 @@ async def gmail_push(request: Request):
         return {"status": "no-history-id"}
 
     # Trigger Gmail history processing
-    from mail_api import process_gmail_history, get_gmail_service
+    from integration.mail_api import process_gmail_history, get_gmail_service
 
     service = get_gmail_service()
     asyncio.create_task(process_gmail_history(service, str(history_id)))

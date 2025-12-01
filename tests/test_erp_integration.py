@@ -1,9 +1,13 @@
-"""
-Test script for the ERP simulator integration with the customer support tools
-"""
+"""Test script for the ERP simulator integration with the customer support tools."""
 import json
-from database.service import ERPService
-from tools import check_order_status, track_order, check_stock, initialize_resend, initialize_refund
+from data.service import ERPService
+from agent.tools import (
+    check_order_status,
+    track_order,
+    check_stock,
+    initialize_resend,
+    initialize_refund,
+)
 
 def test_order_status():
     """Test the order status tool"""

@@ -2,9 +2,9 @@
 """
 Test script to verify that messages are being properly serialized and stored in the database.
 """
-from state import SupportAgentState
+from agent.state import SupportAgentState
 from langchain_core.messages import HumanMessage, AIMessage
-from database.ticket_db import save_ticket_state, get_db, Ticket, TicketState
+from data.ticket_db import save_ticket_state, get_db, Ticket, TicketState
 from datetime import datetime
 import uuid
 

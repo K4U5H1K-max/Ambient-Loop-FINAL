@@ -8,13 +8,11 @@ from tools import check_order_status, track_order, check_stock, initialize_resen
 from langchain_core.tools import tool as create_tool
 import json
 from typing import Dict, Any, List, Optional
-from database.policies import format_policies_for_llm, get_policies_for_problem
-from database.data import ORDERS
-from difflib import get_close_matches
+from data.policies import format_policies_for_llm, get_policies_for_problem
 from dotenv import load_dotenv
 load_dotenv()
-from database.memory import get_policies_context, get_products_context
-import re
+from data.memory import get_policies_context, get_products_context
+from prompts import CLASSIFICATION_PROMPT, TIER_CLASSIFIER_PROMPT, POLICY_SELECTION_PROMPT, ISSUE_CLASSIFIER_PROMPT, RESOLUTION_SUMMARY_PROMPT
 
 # Custom callback handler to capture agent reasoning
 class ReasoningCaptureHandler(BaseCallbackHandler):
@@ -48,12 +46,6 @@ class PolicySelection(BaseModel):
     reasoning: str = Field(description="Detailed reasoning for selecting this policy based on the customer issue and problem types")
     application_notes: Optional[str] = Field(description="Specific notes on how to apply this policy to the current situation", default=None)
 
-# Add this near the top with other Pydantic models
-class TicketValidation(BaseModel):
-    is_support_ticket: bool = Field(description="Whether this is a customer support ticket")
-    has_order_id: bool = Field(description="Whether an order ID is present in the message")
-    extracted_order_id: Optional[str] = Field(description="The extracted order ID if present (format: ORD#####)", default=None)
-
 # Initialize LLM
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
@@ -72,169 +64,29 @@ def validate_and_load_context(state: SupportAgentState):
     if not user_message:
         return {"is_support_ticket": False}
     
-    # Use structured LLM output
-    classification_prompt = f"""Analyze this customer message and extract:
-1. Whether it's a support ticket (order issues, product problems, complaints, refunds, etc.)
-2. Whether an order ID is present (format: ORD##### where # is a digit)
-3. The exact order ID if present
-
-Message: {user_message}
-
-Respond with structured JSON."""
-
-    structured_llm = llm.with_structured_output(TicketValidation)
-    response = structured_llm.invoke([HumanMessage(content=classification_prompt)])
+    # Use LLM to classify if this is a support ticket
+    classification_prompt = CLASSIFICATION_PROMPT.format(user_message=user_message)
     
-    if not response.is_support_ticket:
-        print("Not a support ticket - ending workflow")
-        return {"is_support_ticket": False}
+    response = llm.invoke(classification_prompt)
+    is_support = response.content.strip().upper() == "YES"
     
-    # Support ticket confirmed
-    if response.has_order_id and response.extracted_order_id:
-        order_id_upper = response.extracted_order_id.upper()
-        
-        # Validate order exists
-        if order_id_upper in ORDERS.keys():
-            products_context = get_products_context()
-            print(f"✅ Valid order ID: {order_id_upper}")
-            print(f"Loaded products context: {len(products_context)} chars")
-            return {
-                "is_support_ticket": True,
-                "has_order_id": True,
-                "order_id": order_id_upper,
-                "products_cache": products_context
-            }
-        else:
-            print(f"⚠️ Order ID {order_id_upper} not found in database")
-            return {
-                "is_support_ticket": True,
-                "has_order_id": False,
-                "order_id": None,
-                "products_cache": None
-            }
-    else:
-        print("No order ID found in message")
+    if is_support:
+        # Preload products context
+        products_context = get_products_context()
+        print(f"Loaded products context: {len(products_context)} chars")
         return {
             "is_support_ticket": True,
-            "has_order_id": False,
-            "order_id": None,
-            "products_cache": None
+            "products_cache": products_context
         }
+    else:
+        print("Not a support ticket - ending workflow")
+        return {"is_support_ticket": False}
+
+
 def tier_classifier(state: SupportAgentState):
     issue_text = state.messages[0].content
     
-    prompt = (
-        """# Customer Support Tier Classification System Prompt
-
-You are an expert customer support tier classification AI. Your role is to analyze incoming customer issues and classify them into one of three support tiers based on complexity, required expertise, and potential business impact.
-
-## Classification Criteria
-
-### L1 (Basic/Tier 1) - Frontline Support
-**Characteristics:**
-- Simple, routine inquiries that can be resolved with standard procedures
-- Issues covered by documented policies and FAQs
-- No technical expertise required
-- Can be resolved in a single interaction
-- Low business impact
-
-**Examples:**
-- Order status checks
-- Basic product information requests
-- Standard returns/exchanges within policy
-- Tracking information requests
-- Password resets
-- Shipping address updates
-- General product availability questions
-- Simple account inquiries
-
-### L2 (Intermediate/Tier 2) - Specialized Support
-**Characteristics:**
-Handels more complex issues requiring deeper knowledge of products/services
-- May involve troubleshooting, investigations, or policy exceptions
--When Tools like Refund or resend are called classifiy as L3
-
-### L3 (Advanced/Tier 3) - Expert/Management Support
-**Characteristics:**
-- Highly complex or sensitive issues
-- Requires senior judgment or policy exceptions
-- Potential legal, fraud, Financial or security implications
-- financial impact on business
-**Examples:**
-- Refund Requests
-- Resend Requests
-- Suspected fraud or chargebacks
-- Legal threats or complaints
-- Data privacy/security concerns (GDPR, data deletion)
-- High-value order disputes (>$500)
-- Repeated failures in service
-- Product safety concerns
-- Media/public relations issues
-- refund disputes
-- Account takeover or security breaches
-
-## Classification Process
-
-1. **Read the entire customer message carefully**
-2. **Identify key indicators:**
-   - What is the customer asking for?
-   - What is the underlying problem?
-   - What resolution are they seeking?
-   - Is there urgency or emotional intensity?
-   - Are there legal/security keywords?
-   - What is the potential business impact?
-
-3. **Apply decision logic:**
-   - Start by assuming L1 unless evidence suggests otherwise
-   - Escalate to L2 if: investigation needed, policy exceptions, coordination required
-   - Escalate to L3 if: Refund or Resend tools are called
-
-4. **Output format:**
-   Respond with ONLY the tier level in your response: "L1", "L2", or "L3"
-   Include brief reasoning (1-2 sentences) explaining your classification.
-
-## Special Considerations
-
-**Always escalate to L3 if:**
-- Refund or Resend tools are called
-- Customer mentions legal action, lawyers, or lawsuits
-- Suspected fraud, account compromise, or security breach
-- Data privacy requests (deletion, export under GDPR/CCPA)
-- Product safety or health concerns
-- Media involvement or public complaints
-- Explicit VIP/premium customer status mentioned
-- Order value exceeds $500
-- Issue has been escalated multiple times before
-
-**Default to L2 if uncertain** between L1 and L2 to ensure proper handling.
-
-**Be conservative with L1** - only assign if you're confident it can be resolved with standard procedures.
-
-## Example Classifications
-
-**Example 1:**
-Customer: "Where is my order #ORD12345? It was supposed to arrive yesterday."
-Classification: **L1**
-Reasoning: Standard order tracking inquiry, can be resolved by checking order status.
-
-**Example 2:**
-Customer: "I received a damaged Smart Watch (order #ORD67890). I need a replacement ASAP!"
-Classification: **L3**
-Reasoning: Requires stock verification and coordination for replacement/refund decision.
-
-**Example 3:**
-Customer: "This is the third time you've messed up my order! I'm contacting my lawyer and posting about this on social media. Order #ORD55555."
-Classification: **L3**
-Reasoning: Legal threat, repeated service failure, potential PR impact, requires senior management attention.
-
-## Your Task
-
-Analyze the provided customer issue and respond with:
-1. The tier classification (L1, L2, or L3)
-2. Brief reasoning for your decision (2-3 sentences maximum)
-
-Be decisive, consistent, and err on the side of appropriate escalation to ensure customer satisfaction."""
-    )
+    prompt = TIER_CLASSIFIER_PROMPT
     
     response = llm.invoke([HumanMessage(content=f"{prompt}\nCustomer issue: {issue_text}")])
     response_text = response.content.strip().lower()
@@ -324,8 +176,7 @@ Be decisive, consistent, and err on the side of appropriate escalation to ensure
 def query_issue_classifier(state: SupportAgentState):     
     issue_text = state.messages[0].content
     
-    prompt = (
-        """you are a customer support AI Agent whose primary role is to classify if the incoming customer issue is a support ticket(Issue) or a general inquiry(Query).""")
+    prompt = ISSUE_CLASSIFIER_PROMPT
     
     response = llm.invoke([HumanMessage(content=f"{prompt}\nCustomer issue: {issue_text}")])
 
@@ -347,21 +198,7 @@ def query_issue_classifier(state: SupportAgentState):
 
 
 def classify_issue(state: SupportAgentState):
-    prompt = (
-        "You are a customer support AI Agent. Analyze the following customer issue and identify the problem types.\n"
-        "Select from the following categories:\n"
-        "- non-delivery: Customer hasn't received their order\n"
-        "- delayed: Order is taking longer than expected\n"
-        "- damaged: Product arrived damaged or defective\n"
-        "- wrong-item: Customer received incorrect product\n"
-        "- quality: Product quality didn't meet expectations\n"
-        "- fit: Size or fit issue with clothing/wearable\n"
-        "- return: Customer wants to return an item\n"
-        "- refund: Customer is requesting a refund\n"
-        "- account: Issues with customer's account\n"
-        "- website: Problems with the website\n"
-        "- general: Any other general inquiries\n"
-    )
+    prompt = ISSUE_CLASSIFIER_PROMPT
     
     issue_text = state.messages[0].content
     
@@ -404,105 +241,37 @@ def pick_policy(state: SupportAgentState):
 
     # Fetch policies from memory store and inject as explicit context
     policies_context = get_policies_context()
-    # Try to obtain a concrete list of candidate policies from the policy service
-    candidate_policies = None
-    try:
-        candidate_policies = get_policies_for_problem(issue_text)
-    except Exception:
-        candidate_policies = None
 
-    # Normalize candidate policy names and descriptions
-    allowed_names = []
-    policy_map = {}
-    if isinstance(candidate_policies, list) and candidate_policies:
-        for p in candidate_policies:
-            # support dicts with different keys
-            name = p.get("name") if isinstance(p, dict) else None
-            if not name:
-                name = p.get("policy_name") if isinstance(p, dict) else None
-            desc = p.get("description") if isinstance(p, dict) else None
-            if not name and isinstance(p, str):
-                # If entries are strings, try to split into name/desc
-                name = p
-            if name:
-                allowed_names.append(name)
-                policy_map[name] = desc or ""
-
-    # If no structured candidates, fall back to the pre-formatted policy text
-    policies_text = format_policies_for_llm() if not policies_context else policies_context
-
-    # Build a strict prompt that enumerates candidates (if available) and requires exact selection
-    if allowed_names:
-        candidates_block = "\n".join([f"{i+1}. {n} - {policy_map.get(n,'')}" for i, n in enumerate(allowed_names)])
-        instruction = (
-            "You are a support AI. From the exact policy names listed below, choose the single most appropriate policy for the customer issue.\n"
-            "Important: Your output MUST follow the PolicySelection JSON schema exactly, and `policy_name` MUST be one of the policy names listed (case-sensitive exact match).\n"
-            "If you cannot find a suitable policy, set `policy_name` to the string 'UNKNOWN' and provide your reasoning. Do NOT invent new policy names.\n\n"
-            f"Candidate Policies:\n{candidates_block}\n\n"
-            f"Customer Issue: {issue_text}\n"
-            f"Problem Types: {problems_str}\n"
-            f"Issue Analysis: {classification_reasoning}\n\n"
-        )
-    else:
-        instruction = (
-            "You are a support AI. Use the policy context below to pick the most appropriate policy.\n"
-            "Return a PolicySelection JSON object. If you cannot identify a policy name exactly, set `policy_name` to 'UNKNOWN'. Do NOT fabricate policy names.\n\n"
-            f"Policy Context:\n{policies_text}\n\n"
-            f"Customer Issue: {issue_text}\n"
-            f"Problem Types: {problems_str}\n"
-            f"Issue Analysis: {classification_reasoning}\n\n"
-        )
+    prompt = POLICY_SELECTION_PROMPT.format(
+        customer_issue=issue_text,
+        problem_types=problems_str,
+        issue_analysis=classification_reasoning,
+        policy_memory_context=policies_context
+    )
 
     structured_llm = llm.with_structured_output(PolicySelection)
-    response = structured_llm.invoke([HumanMessage(content=instruction)])
+    response = structured_llm.invoke([HumanMessage(content=prompt)])
 
-    policy_name = getattr(response, "policy_name", None)
-    policy_desc = getattr(response, "policy_description", "")
-    reasoning = getattr(response, "reasoning", "")
-    application_notes = getattr(response, "application_notes", None) or ""
+    policy_name = response.policy_name
+    policy_desc = response.policy_description
+    reasoning = response.reasoning
+    application_notes = response.application_notes or ""
 
-    # Validate the returned policy_name
-    selected_name = None
-    if policy_name and allowed_names:
-        # direct match
-        if policy_name in allowed_names:
-            selected_name = policy_name
-        else:
-            # try fuzzy matching
-            matches = get_close_matches(policy_name, allowed_names, n=1, cutoff=0.6)
-            if matches:
-                selected_name = matches[0]
-
-    # If still no selection, try to pick a safe fallback
-    if not selected_name:
-        if allowed_names:
-            # fallback to the first candidate and record that this was a fallback
-            selected_name = allowed_names[0]
-            policy_desc = policy_map.get(selected_name, policy_desc or "")
-            reasoning = (reasoning or "") + "\n\n(Fallback: model did not return an exact policy name; selected first candidate.)"
-        else:
-            # No candidates available, use UNKNOWN and keep the model's description
-            selected_name = policy_name or "UNKNOWN"
-
-    # Compose messages for the conversation
     reasoning_message = AIMessage(content=f"🔍 **Policy Analysis**:\n{reasoning}")
-    policy_content = f"📋 **Selected Policy**: {selected_name}\n{policy_desc}"
+    policy_content = f"📋 **Selected Policy**: {policy_name}\n{policy_desc}"
     if application_notes:
         policy_content += f"\n\n📝 **Application Notes**: {application_notes}"
     policy_message = AIMessage(content=policy_content)
 
-    # Log selection for auditing (printed output will appear in logs)
-    print(f"pick_policy: selected='{selected_name}' (validated: {selected_name in allowed_names}), original_returned='{policy_name}'")
-
     return {
         "messages": [*state.messages, reasoning_message, policy_message],
-        "policy_name": selected_name,
+        "policy_name": policy_name,
         "policy_desc": policy_desc,
         "reasoning": {**state.reasoning, "policy": reasoning},
         "thought_process": state.thought_process + [{
             "step": "pick_policy",
             "reasoning": reasoning,
-            "output": f"{selected_name}: {policy_desc}"
+            "output": f"{policy_name}: {policy_desc}"
         }]
     }
 
@@ -527,41 +296,6 @@ def resolve_issue(state: SupportAgentState):
     # Use cached products context from validation node
     products_context = state.products_cache or ""
 
-    # SHORT-CIRCUIT: if this is a general policy/query request (no actionable order),
-    # do NOT call tools. Instead, return a policy-only informational email.
-    query_issue_flag = getattr(state, "query_issue", None)
-    #problems_lower = ", ".join(state.problems).lower() if getattr(state, "problems", None) else ""
-    # if query_issue_flag == "query" or "general" :
-    #     policies_context = get_policies_context()
-    #     policy_text = state.policy_desc or policies_context or (
-    #         "Damaged Item Policy: If a customer receives a damaged or defective item, they are eligible for an immediate replacement or full refund, including shipping costs."
-    #     )
-
-        # email_body = (
-        #     "Resolution Summary:\n"
-        #     "Dear Valued Customer,\n\n"
-        #     "Thank you for contacting [Company Name]. We appreciate you reaching out to us.\n\n"
-        #     "Regarding our damaged product policy: "
-        #     f"{policy_text}\n\n"
-        #     "If you would like us to investigate a specific order or request a replacement or refund, please provide your order number (format: ORD#####) and any photos of the damaged item. Once we have that information we can check order status, stock availability, and proceed with a replacement or refund if applicable.\n\n"
-        #     "Kind regards,\n"
-        #     "Customer Support Team\n"
-        #     "[Company Name]"
-        # )
-
-        # resolution_message = AIMessage(content=email_body)
-        # return {
-        #     "messages": [*state.messages, resolution_message],
-        #     "action_taken": "Policy Info",
-        #     "reason": "Provided policy information without tool calls",
-        #     "reasoning": {**state.reasoning, "resolve": "Policy-only response (no tools used)"},
-        #     "thought_process": state.thought_process + [{
-        #         "step": "resolve_issue",
-        #         "reasoning": "Policy-only response",
-        #         "output": "Policy Info provided to customer"
-        #     }]
-        # }
-
     # Create task description
     task = (
         f"You are a customer support agent handling the following issue:\n"
@@ -569,10 +303,8 @@ def resolve_issue(state: SupportAgentState):
         f"Identified problem types: {problems_str}\n"
         f"Company policy: {policy_info}\n\n"
         f"Product Memory Context (from store):\n{products_context}\n\n"
-        f"Query/Issue Classification: {query_issue_flag}\n\n"
-        f"Has Order ID: {state.has_order_id}\n\n"
         f"Instructions:\n"
-        f"1. Extract order ID (format: ORD#####) only if has_order_id is True.\n"
+        f"1. Extract order ID (format: ORD#####).\n"
         f"2. Use tools as needed. Do not fabricate data not shown.\n"
         f"3. Choose resend vs refund based strictly on stock availability and policy guidance.\n"
         f"4. Keep reasoning concise but stepwise.\n"
@@ -594,7 +326,7 @@ def resolve_issue(state: SupportAgentState):
         f"   - If correct item is out of stock, initiate a refund using initialize_refund_tool\n"
         f"5. For any other issues: Apply the relevant policy\n\n"
         f"IMPORTANT: After completing your investigation, you MUST format your final response as a professional customer support email using this exact structure:\n\n"
-        # f"Resolution Summary:\n"
+        f"Resolution Summary:\n"
         f"Dear [Customer Name],\n\n"
         f"Thank you for reaching out to us. We appreciate you contacting [Company Name].\n\n"
         f"I understand that you are experiencing [briefly describe their issue], and after carefully reviewing your situation, "
@@ -672,28 +404,14 @@ def resolve_issue(state: SupportAgentState):
                     if resp["type"] == "accept":
                         pass # Do nothing, proceed to tool call, let it get executed
                     elif resp["type"] == "ignore":
-                        # Log the denial but don't add to messages (prevents email extraction)
-                        print(
-                            f"Action {tool_name} denied by human reviewer for order {tool_input.get('order_id')}. Stopping resolution."
+                        messages.append(
+                            ToolMessage(
+                                name=tool_name,
+                                content="ACTION_DENIED_BY_HUMAN_REQUEST",
+                                tool_call_id=tool_call["id"]
+                            )
                         )
-                        
-                        # Return with denial state WITHOUT adding denial message
-                        return {
-                            "messages": [*state.messages, *tool_messages],  # Don't include denial_message
-                            "action_taken": "Action Denied",
-                            "reason": f"Human denied {tool_name} action",
-                            "email_reply": None,  # ⬅️ Explicitly set to None
-                            "requires_human_review": True,
-                            "reasoning": {
-                                **state.reasoning,
-                                "resolve": f"{tool_name} denied by human - requires supervisor review"
-                            },
-                            "thought_process": state.thought_process + [{
-                                "step": "resolve_issue",
-                                "reasoning": f"Critical action {tool_name} was denied by human",
-                                "output": "Execution stopped - requires supervisor intervention"
-                            }]
-                        }
+                        continue  # Skip this tool call
                 
                 # Execute the tool
                 tool_func = None
@@ -766,7 +484,6 @@ def resolve_issue(state: SupportAgentState):
         "messages": [*state.messages, *tool_messages, resolution_message],
         "action_taken": action,
         "reason": reason,
-        "email_reply": result_text,
         "reasoning": {**state.reasoning, "resolve": reasoning_summary},
         "thought_process": state.thought_process + [{
             "step": "resolve_issue",
@@ -774,4 +491,31 @@ def resolve_issue(state: SupportAgentState):
             "detailed_steps": formatted_reasoning,
             "output": f"{action} - {reason}"
         }]
+    }
+def prepare_email_reply(state: SupportAgentState):
+    """
+    This node extracts the final AI email response from the state
+    so the ambient Gmail consumer can send a reply.
+    """
+    # Find last assistant message
+    reply = None
+    for msg in reversed(state.messages):
+        if isinstance(msg, AIMessage) or msg.role in ("assistant", "ai"):
+            reply = msg.content
+            break
+
+    # If somehow no message, fallback
+    if not reply:
+        reply = (
+            "Thank you for contacting support. "
+            "We have received your request and will update you shortly."
+        )
+
+    return {
+        "email_reply": reply,
+        "messages": state.messages,
+        "action_taken": getattr(state, "action_taken", None),
+        "reason": getattr(state, "reason", None),
+        "reasoning": state.reasoning,
+        "thought_process": state.thought_process,
     }

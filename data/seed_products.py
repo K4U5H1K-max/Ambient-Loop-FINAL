@@ -1,7 +1,7 @@
-from database.ticket_db import Product
-from database.models import ProductCategory  # use enum from models.py
-from database.ticket_db import get_session
-from database.data import PRODUCTS
+from data.ticket_db import Product
+from data.models import ProductCategory  # use enum from models.py
+from data.ticket_db import get_session
+from data.data import PRODUCTS
 
 def seed_products():
     """Populate the products table using entries from data.py."""

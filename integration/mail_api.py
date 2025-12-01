@@ -687,7 +687,7 @@ async def process_email_event(event: Dict[str, Any], service):
 
         # Save to PostgreSQL
         try:
-            from database.ticket_db import SessionLocal, save_ticket_state
+            from data.ticket_db import SessionLocal, save_ticket_state
 
             db = SessionLocal()
             try:

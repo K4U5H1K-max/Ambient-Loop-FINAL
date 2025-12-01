@@ -6,7 +6,7 @@ import random
 from typing import Dict, List
 import uuid
 
-from database.models import (
+from data.models import (
     Product, InventoryItem, Shipment, Order, OrderItem, Customer,
     TrackingEvent, ReturnRequest, OrderStatus, ShipmentStatus, ProductCategory
 )

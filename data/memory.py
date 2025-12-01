@@ -23,7 +23,7 @@ def get_policies_context(query: str = "", limit: int = 25) -> str:
     uri = STORE_URL
     if not uri:
         # Fallback to static policies
-        from database.policies import format_policies_for_llm
+        from data.policies import format_policies_for_llm
         return format_policies_for_llm()
     
     lines = []
@@ -38,11 +38,11 @@ def get_policies_context(query: str = "", limit: int = 25) -> str:
             return "\n".join(lines)
         else:
             # Fallback if store is empty
-            from database.policies import format_policies_for_llm
+            from data.policies import format_policies_for_llm
             return format_policies_for_llm()
     except Exception as e:
         # Fallback on error
-        from database.policies import format_policies_for_llm
+        from data.policies import format_policies_for_llm
         return format_policies_for_llm()
 
 def get_products_context(limit: int = 25) -> str:
@@ -66,7 +66,7 @@ def get_products_context(limit: int = 25) -> str:
 
 def seed_policy_memory(db: Session, store):
     """Seed LangMem from existing policies stored in the database."""
-    from database.ticket_db import Policy
+    from data.ticket_db import Policy
     
     # Check if already seeded
     try:
@@ -93,7 +93,7 @@ def seed_policy_memory(db: Session, store):
 
 def seed_product_memory(db: Session, store):
     """Load all product metadata into LangMem."""
-    from database.ticket_db import Product
+    from data.ticket_db import Product
     
     # Check if already seeded
     try:

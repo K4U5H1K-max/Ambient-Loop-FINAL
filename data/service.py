@@ -6,11 +6,11 @@ from datetime import datetime, timedelta
 import uuid
 import random
 
-from database.models import (
+from data.models import (
     Product, InventoryItem, Shipment, Order, OrderItem, Customer,
     TrackingEvent, ReturnRequest, OrderStatus, ShipmentStatus
 )
-from database.data import PRODUCTS, INVENTORY, ORDERS, SHIPMENTS, CUSTOMERS, RETURN_REQUESTS
+from data.data import PRODUCTS, INVENTORY, ORDERS, SHIPMENTS, CUSTOMERS, RETURN_REQUESTS
 
 class ERPService:
     """Service layer for interacting with the ERP system data"""
