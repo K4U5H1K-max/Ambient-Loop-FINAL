@@ -36,11 +36,3 @@ python main.py
 ```
 
 On first run a browser window will open to authorize the Gmail account. A token will be stored in `token.pickle`.
-
-Behaviour notes
-- This implementation uses short-interval polling and is intended for local/dev use.
-- For production or scale, use Gmail push notifications (Cloud Pub/Sub) and a verified HTTPS endpoint. I can help implement that if you want.
-
-Next steps I can do for you
-- Implement push-based notifications using Gmail Watch + Google Cloud Pub/Sub and a small HTTP endpoint to receive notifications.
-- Add an example ambient agent receiver endpoint (Flask/Express) to test end-to-end.
