@@ -1,18 +1,21 @@
 """
-Ambient Gmail poller + LangGraph (Agent Inbox) integration, pub/sub style.
+Ambient Gmail + LangGraph (Agent Inbox) integration, push Pub/Sub style.
 
-- Publisher:
-    gmail_poller() -> pushes events into incoming_email_queue
-- Subscriber:
-    email_worker() -> pulls events and calls process_email_event()
-- Human resolution worker:
+External flow:
+    Gmail WATCH -> Google Pub/Sub topic -> push -> /gmail/push (FastAPI)
+    /gmail/push -> process_gmail_history() -> incoming_email_queue
+
+Internal flow:
+    incoming_email_queue -> email_worker() -> process_email_event()
+    process_email_event() -> LangGraph run + save_ticket_state() + Gmail reply
     human_resolution_monitor() -> handles Agent Inbox interrupts
 
-If a run completes with no interrupts:
-    - Pull final state from LangGraph
-    - Extract reply text
-    - Save ticket + state into PostgreSQL
-    - Send Gmail reply and mark original message as read
+Rules:
+- Reply ALWAYS taken from nodes.py → thread_state["values"]["email_reply"]
+- No regex. No guessing.
+- L1/L2 always reply.
+- L3 → interrupt → pending → human_monitor checks → send only if approved.
+- If human ignores/denies → message frozen (unread).
 """
 
 import os
@@ -24,7 +27,6 @@ import asyncio
 from datetime import datetime
 import base64
 from email.mime.text import MIMEText
-import re
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -53,9 +55,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
 ]
 
-# Polling interval (seconds)
-POLL_INTERVAL = int(os.getenv("GMAIL_POLL_INTERVAL", "30"))
-
 # How often to check for human-resolved threads (seconds)
 HUMAN_MONITOR_INTERVAL = int(os.getenv("HUMAN_MONITOR_INTERVAL", "20"))
 
@@ -67,7 +66,7 @@ logging.basicConfig(
 # LangGraph async client
 client = get_client(url=LANGGRAPH_URL)
 
-# Pub/sub queue: publisher = gmail_poller, subscriber = email_worker
+# Pub/sub queue: producer = process_gmail_history (push), consumer = email_worker
 incoming_email_queue: asyncio.Queue = asyncio.Queue()
 
 
@@ -77,13 +76,16 @@ incoming_email_queue: asyncio.Queue = asyncio.Queue()
 
 def load_state() -> Dict[str, Any]:
     if not os.path.exists(STATE_PATH):
-        return {"seen_messages": {}}
+        return {"seen_messages": {}, "last_history_id": None}
     try:
         with open(STATE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            if "seen_messages" not in data:
+                data["seen_messages"] = {}
+            return data
     except Exception as e:
         logging.error(f"Failed to load state.json: {e}")
-        return {"seen_messages": {}}
+        return {"seen_messages": {}, "last_history_id": None}
 
 
 def save_state(state: Dict[str, Any]) -> None:
@@ -91,6 +93,17 @@ def save_state(state: Dict[str, Any]) -> None:
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
     os.replace(tmp_path, STATE_PATH)
+
+
+def get_last_history_id() -> Optional[str]:
+    state = load_state()
+    return state.get("last_history_id")
+
+
+def set_last_history_id(history_id: str) -> None:
+    state = load_state()
+    state["last_history_id"] = history_id
+    save_state(state)
 
 
 def set_message_status(
@@ -109,6 +122,7 @@ def set_message_status(
         - "processing"       : currently being handled
         - "awaiting_human"   : interrupted, waiting for Agent Inbox decision
         - "completed"        : final email sent, Gmail marked read
+        - "action_denied"    : human denied/ignored critical action, no auto email
     """
     state = load_state()
     seen = state.setdefault("seen_messages", {})
@@ -170,28 +184,6 @@ def get_gmail_service():
         raise
 
 
-def list_unread_messages(service, max_results: int = 20) -> List[Dict[str, Any]]:
-    """
-    List unread messages in INBOX.
-    """
-    try:
-        response = (
-            service.users()
-            .messages()
-            .list(
-                userId="me",
-                labelIds=["INBOX"],
-                q="is:unread",
-                maxResults=max_results,
-            )
-            .execute()
-        )
-        return response.get("messages", [])
-    except HttpError as e:
-        logging.error(f"Error listing unread messages: {e}")
-        return []
-
-
 def get_full_message(service, msg_id: str) -> Dict[str, Any]:
     try:
         return (
@@ -239,7 +231,9 @@ def extract_plain_body(payload: Dict[str, Any]) -> str:
     def _walk(p):
         if p.get("mimeType") == "text/plain" and "data" in p.get("body", {}):
             data = p["body"]["data"]
-            return base64.urlsafe_b64decode(data.encode("utf-8")).decode("utf-8", errors="ignore")
+            return base64.urlsafe_b64decode(data.encode("utf-8")).decode(
+                "utf-8", errors="ignore"
+            )
         for part in p.get("parts", []) or []:
             text = _walk(part)
             if text:
@@ -344,20 +338,28 @@ def make_langgraph_thread_id(gmail_identifier: str) -> str:
     return f"gmail-{gmail_identifier}"
 
 
-async def ensure_langgraph_thread(requested_thread_id: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+async def ensure_langgraph_thread(
+    requested_thread_id: str, metadata: Optional[Dict[str, Any]] = None
+) -> str:
     """
     Ensure a LangGraph thread exists for an incoming Gmail thread.
     Returns the actual `thread_id` created or existing on the server.
     """
     try:
-        if isinstance(requested_thread_id, str) and requested_thread_id.startswith("gmail-"):
+        if isinstance(requested_thread_id, str) and requested_thread_id.startswith(
+            "gmail-"
+        ):
             resp = await client.threads.create(metadata=metadata or {})
-            created_thread_id = resp.get("thread_id") or resp.get("id") or resp.get("threadId")
+            created_thread_id = (
+                resp.get("thread_id") or resp.get("id") or resp.get("threadId")
+            )
             if not created_thread_id:
                 created_thread_id = resp.get("id") if isinstance(resp, dict) else None
 
             if not created_thread_id:
-                logging.error(f"Could not determine created thread_id from response: {resp}")
+                logging.error(
+                    f"Could not determine created thread_id from response: {resp}"
+                )
                 raise RuntimeError("Failed to determine LangGraph thread id")
 
             return created_thread_id
@@ -366,13 +368,19 @@ async def ensure_langgraph_thread(requested_thread_id: str, metadata: Optional[D
             await client.threads.get_state(thread_id=requested_thread_id)
             return requested_thread_id
         except Exception:
-            logging.info(f"Requested LangGraph thread {requested_thread_id} not found; creating new thread")
+            logging.info(
+                f"Requested LangGraph thread {requested_thread_id} not found; creating new thread"
+            )
             resp = await client.threads.create(metadata=metadata or {})
-            created_thread_id = resp.get("thread_id") or resp.get("id") or resp.get("threadId")
+            created_thread_id = (
+                resp.get("thread_id") or resp.get("id") or resp.get("threadId")
+            )
             if not created_thread_id:
                 created_thread_id = resp.get("id") if isinstance(resp, dict) else None
             if not created_thread_id:
-                logging.error(f"Could not determine created thread_id from response: {resp}")
+                logging.error(
+                    f"Could not determine created thread_id from response: {resp}"
+                )
                 raise RuntimeError("Failed to determine LangGraph thread id")
             return created_thread_id
 
@@ -409,103 +417,6 @@ def build_run_input_from_email(email_meta: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def extract_reply_from_thread_state(thread_state: Dict[str, Any]) -> Optional[str]:
-    """
-    Extract the final reply text from thread_state.
-    """
-    values = thread_state.get("values", thread_state)
-
-    try:
-        logging.debug(f"extract_reply: thread_state keys: {list(thread_state.keys())}")
-        logging.debug(f"extract_reply: values (truncated): {json.dumps(values, default=str)[:2000]}")
-    except Exception:
-        logging.debug("extract_reply: failed to serialize thread_state for debug")
-
-    for key in ("email_reply", "reply", "final_reply", "assistant_reply"):
-        v = values.get(key) if isinstance(values, dict) else None
-        if isinstance(v, str) and v.strip():
-            txt = v.strip()
-            m = re.search(r"\bDear\b", txt, re.IGNORECASE)
-            return txt[m.start():].strip() if m else txt
-
-    def walk_for_candidates(obj):
-        candidates = []
-
-        def walk(o):
-            if isinstance(o, dict):
-                for k, vv in o.items():
-                    lk = k.lower()
-                    if isinstance(vv, str):
-                        if lk in ("email_reply", "reply", "final_reply", "assistant_reply", "response"):
-                            candidates.append(vv)
-                    walk(vv)
-            elif isinstance(o, list):
-                for item in o:
-                    walk(item)
-
-        walk(obj)
-        return candidates
-
-    candidates = walk_for_candidates(values)
-    if candidates:
-        candidates = [c.strip() for c in candidates if isinstance(c, str) and c.strip()]
-        if candidates:
-            candidates.sort(key=lambda s: len(s), reverse=True)
-            txt = candidates[0]
-            m = re.search(r"\bDear\b", txt, re.IGNORECASE)
-            return txt[m.start():].strip() if m else txt
-
-    def find_message_in_node(o):
-        if isinstance(o, dict):
-            for k, vv in o.items():
-                lk = k.lower()
-                if lk in ("messages", "history", "outputs", "events") and isinstance(vv, list):
-                    for entry in reversed(vv):
-                        if isinstance(entry, dict):
-                            cont = (
-                                entry.get("content")
-                                or entry.get("text")
-                                or entry.get("value")
-                                or entry.get("output")
-                            )
-                            if isinstance(cont, str) and cont.strip():
-                                return cont.strip()
-                            for subkey in ("content", "text", "value", "output"):
-                                sub = entry.get(subkey)
-                                if isinstance(sub, str) and sub.strip():
-                                    return sub.strip()
-                        elif isinstance(entry, str) and entry.strip():
-                            return entry.strip()
-                else:
-                    res = find_message_in_node(vv)
-                    if res:
-                        return res
-        elif isinstance(o, list):
-            for item in reversed(o):
-                res = find_message_in_node(item)
-                if res:
-                    return res
-        return None
-
-    msg = find_message_in_node(values)
-    if msg:
-        txt = msg
-        m = re.search(r"\bDear\b", txt, re.IGNORECASE)
-        return txt[m.start():].strip() if m else txt
-
-    try:
-        s = json.dumps(values, default=str)
-        m = re.search(r"Resolution Summary:\\s*(Dear[\s\S]{20,2000})", s)
-        if m:
-            txt = m.group(0)
-            m2 = re.search(r"\bDear\b", txt, re.IGNORECASE)
-            return txt[m2.start():].strip() if m2 else txt
-    except Exception:
-        pass
-
-    return None
-
-
 def thread_state_has_interrupt(thread_state: Dict[str, Any]) -> bool:
     """
     Check if thread state still has pending interrupts.
@@ -520,70 +431,65 @@ def thread_state_has_interrupt(thread_state: Dict[str, Any]) -> bool:
 
 def thread_state_has_resolution(thread_state: Dict[str, Any]) -> bool:
     """
-    Heuristic to decide if the agent finished with a resolution.
+    Resolution exists iff nodes.py wrote a non-empty values["email_reply"].
+    No regex. No guessing.
     """
     if thread_state_has_interrupt(thread_state):
         return False
-
     values = thread_state.get("values", thread_state)
-
-    if values.get("action_taken"):
-        return True
-
-    for key in ("email_reply", "final_reply", "reply", "assistant_reply"):
-        v = values.get(key)
-        if isinstance(v, str) and v.strip():
-            return True
-
-    msgs = values.get("messages") or []
-
-    def looks_like_final_message(s: str) -> bool:
-        if not s or not isinstance(s, str):
-            return False
-        low = s.lower()
-        if "resolution summary" in low:
-            return True
-        if "✅ **resolution**" in s or "✅ resolution" in low:
-            return True
-        if "dear" in low:
-            return True
-        return False
-
-    for m in reversed(msgs):
-        if isinstance(m, dict):
-            cont = m.get("content") or m.get("text") or m.get("value") or m.get("output")
-        else:
-            cont = m
-        if isinstance(cont, str) and looks_like_final_message(cont):
-            return True
-
-    return False
+    reply = values.get("email_reply")
+    return isinstance(reply, str) and bool(reply.strip())
 
 
 # =====================================================================
-# WORKERS (PUB/SUB)
+# PUSH HANDLER: PROCESS GMAIL HISTORY
 # =====================================================================
 
-async def gmail_poller(service):
+async def process_gmail_history(service, new_history_id: str):
     """
-    Publisher: polls Gmail and publishes new messages to the incoming_email_queue.
+    Called from FastAPI /gmail/push after decoding Gmail Pub/Sub payload.
 
-    It only enqueues messages that are:
-    - Unread
-    - Not yet tracked as completed / awaiting_human
+    Uses last_history_id from state.json to fetch only new messages via
+    Gmail 'history.list', then enqueues them into incoming_email_queue.
     """
-    logging.info("Starting Gmail poller (publisher)...")
-    while True:
-        try:
-            messages = list_unread_messages(service)
-            if messages:
-                logging.info(f"Found {len(messages)} unread messages")
+    try:
+        last = get_last_history_id()
+        if last is None:
+            set_last_history_id(new_history_id)
+            logging.info(
+                f"Initialized last_history_id={new_history_id}, skipping first batch."
+            )
+            return
 
-            for msg_stub in messages:
-                msg_id = msg_stub["id"]
+        logging.info(f"Processing Gmail history from {last} to {new_history_id}")
+
+        resp = (
+            service.users()
+            .history()
+            .list(userId="me", startHistoryId=last)
+            .execute()
+        )
+
+        history = resp.get("history", [])
+        if not history:
+            logging.info("No new history records.")
+            set_last_history_id(new_history_id)
+            return
+
+        for h in history:
+            msgs_added = h.get("messagesAdded", [])
+            for entry in msgs_added:
+                m = entry.get("message", {})
+                msg_id = m.get("id")
+                if not msg_id:
+                    continue
+
                 record = get_message_record(msg_id)
-
-                if record and record.get("status") in ("completed", "awaiting_human"):
+                if record and record.get("status") in (
+                    "completed",
+                    "awaiting_human",
+                    "action_denied",
+                ):
                     continue
 
                 gmail_msg = get_full_message(service, msg_id)
@@ -608,17 +514,22 @@ async def gmail_poller(service):
                     "langgraph_thread_id": langgraph_thread_id,
                     "email_meta": email_meta,
                 }
+
                 await incoming_email_queue.put(event)
                 logging.info(
-                    f"Enqueued message {msg_id} from '{email_meta['from']}' subject='{email_meta['subject']}'"
+                    f"[PUSH] Enqueued msg {msg_id} from '{email_meta['from']}' "
+                    f"subject='{email_meta['subject']}'"
                 )
 
-            await asyncio.sleep(POLL_INTERVAL)
+        set_last_history_id(new_history_id)
 
-        except Exception as e:
-            logging.error(f"Gmail poller error: {e}")
-            await asyncio.sleep(POLL_INTERVAL)
+    except Exception as e:
+        logging.error(f"Error in process_gmail_history: {e}")
 
+
+# =====================================================================
+# WORKERS (PUB/SUB)
+# =====================================================================
 
 async def process_email_event(event: Dict[str, Any], service):
     """
@@ -629,6 +540,38 @@ async def process_email_event(event: Dict[str, Any], service):
     gmail_thread_id = event["gmail_thread_id"]
     langgraph_thread_id = event["langgraph_thread_id"]
     email_meta = event["email_meta"]
+
+    # -----------------------------------------------------------------
+    # SKIP SELF-SENT EMAILS (Prevents re-processing our own replies)
+    # -----------------------------------------------------------------
+    SELF_SENDERS = {
+        "narasimha112503@gmail.com",
+    }
+    sender = (email_meta.get("from") or "").strip()
+    if any(s in sender for s in SELF_SENDERS):
+        logging.info(
+            f"[SKIP] Ignoring self-sent email msg_id={msg_id} from {sender}"
+        )
+        try:
+            incoming_email_queue.task_done()
+        except Exception:
+            pass
+        return
+
+    # -----------------------------------------------------------------
+    # DUPLICATE PREVENTION: Skip if already completed / frozen
+    # -----------------------------------------------------------------
+    existing = get_message_record(msg_id)
+    if existing and existing.get("status") in ("completed", "action_denied"):
+        logging.info(
+            f"Skipping msg_id={msg_id}; already handled with status="
+            f"{existing.get('status')}."
+        )
+        try:
+            incoming_email_queue.task_done()
+        except Exception:
+            pass
+        return
 
     logging.info(f"Processing email msg_id={msg_id} thread={gmail_thread_id}")
 
@@ -686,7 +629,10 @@ async def process_email_event(event: Dict[str, Any], service):
                     break
 
         if interrupt_detected:
-            logging.info(f"Run interrupted for msg_id={msg_id}; waiting for Agent Inbox decision.")
+            logging.info(
+                f"Run interrupted for msg_id={msg_id}; waiting for Agent Inbox "
+                f"decision."
+            )
             set_message_status(
                 msg_id,
                 gmail_thread_id=gmail_thread_id,
@@ -696,47 +642,53 @@ async def process_email_event(event: Dict[str, Any], service):
             )
             return
 
-        # Final state, non-interrupted
-        thread_state = await client.threads.get_state(thread_id=langgraph_thread_id)
+        thread_state = await client.threads.get_state(
+            thread_id=langgraph_thread_id
+        )
 
         if not thread_state_has_resolution(thread_state):
             logging.warning(f"No clear resolution yet for msg_id={msg_id}")
             return
 
-        # ⬇️ CHECK IF EMAIL SHOULD BE SENT ⬇️
+        # Strict conditions ONLY for L3 ignore/deny (tier classification or refund/resend)
         values = thread_state.get("values", {})
-        email_reply = values.get("email_reply")
         requires_human_review = values.get("requires_human_review", False)
         action_taken = values.get("action_taken")
-        
-        # Don't send email if action was denied
-        if email_reply is None or requires_human_review or action_taken == "Action Denied":
+        action_str = str(action_taken).lower() if action_taken else ""
+
+        # Unified Option C:
+        # If requires_human_review or action contains 'denied'/'ignore' → freeze
+        if (
+            requires_human_review
+            or "denied" in action_str
+            or "ignore" in action_str
+        ):
             logging.info(
-                f"⛔ Skipping email send for msg_id={msg_id}: "
-                f"Action was denied or requires human review. "
-                f"(email_reply={email_reply is not None}, "
-                f"requires_human={requires_human_review}, "
-                f"action={action_taken})"
+                f"❌ Human denial/ignore for msg_id={msg_id}. "
+                f"Not sending email and freezing message (action_denied)."
             )
             set_message_status(
                 msg_id,
                 gmail_thread_id=gmail_thread_id,
                 langgraph_thread_id=langgraph_thread_id,
-                status="action_denied",  # Custom status
+                status="action_denied",
                 last_run_id=last_run_id,
             )
-            # DO NOT mark as read - keep unread for supervisor attention
+            # Do NOT mark as read. Leave unread and never process again.
             return
-        # ⬆️ END CHECK ⬆️
 
-        reply_text = extract_reply_from_thread_state(thread_state)
-        if not reply_text:
-            logging.warning(f"Could not extract reply text for msg_id={msg_id}")
+        # L1/L2 (and L3 approved) ALWAYS reply — reply taken ONLY from email_reply
+        reply_text = values.get("email_reply")
+        if not isinstance(reply_text, str) or not reply_text.strip():
+            logging.error(f"No email_reply found in state for msg_id={msg_id}")
             return
+
+        reply_text = reply_text.strip()
 
         # Save to PostgreSQL
         try:
             from database.ticket_db import SessionLocal, save_ticket_state
+
             db = SessionLocal()
             try:
                 save_ticket_state(
@@ -752,9 +704,10 @@ async def process_email_event(event: Dict[str, Any], service):
             finally:
                 db.close()
         except Exception as e:
-            logging.exception(f"Failed to save ticket state for msg_id={msg_id}: {e}")
+            logging.exception(
+                f"Failed to save ticket state for msg_id={msg_id}: {e}"
+            )
 
-        # Send Gmail reply
         success = send_reply(
             service,
             to_addr=email_meta["from"],
@@ -765,7 +718,6 @@ async def process_email_event(event: Dict[str, Any], service):
         )
 
         if success:
-            print('OHH NOOO!!! Mail is sent')
             mark_message_as_read(service, msg_id)
             set_message_status(
                 msg_id,
@@ -805,10 +757,15 @@ async def human_resolution_monitor(service):
     - Scans all messages with status 'awaiting_human'.
     - For each, checks LangGraph thread_state.
     - Once human has accepted & run has completed:
-        - Extracts final reply,
+        - Uses values['email_reply'] as final reply,
         - Sends Gmail reply,
         - Marks message as read,
         - Marks status 'completed'.
+
+    If supervisor ignores/denies (tier classification or refund/resend):
+        - No reply is sent,
+        - Message stays UNREAD,
+        - Status becomes 'action_denied' (frozen).
     """
     logging.info("Starting human resolution monitor...")
     while True:
@@ -821,49 +778,60 @@ async def human_resolution_monitor(service):
                 gmail_thread_id = rec["gmail_thread_id"]
 
                 logging.info(
-                    f"Checking human resolution for msg_id={msg_id}, thread={lg_thread_id}"
+                    f"Checking human resolution for msg_id={msg_id}, "
+                    f"thread={lg_thread_id}"
                 )
 
                 try:
-                    thread_state = await client.threads.get_state(thread_id=lg_thread_id)
+                    thread_state = await client.threads.get_state(
+                        thread_id=lg_thread_id
+                    )
                 except Exception as e:
-                    logging.error(f"Failed to get thread_state for {lg_thread_id}: {e}")
+                    logging.error(
+                        f"Failed to get thread_state for {lg_thread_id}: {e}"
+                    )
                     continue
 
                 if not thread_state_has_resolution(thread_state):
                     continue
 
-                try:
-                    tool_data = {}
-                    for key in ("tools", "tool_calls", "tool_responses", "calls"):
-                        if key in thread_state:
-                            tool_data[key] = thread_state.get(key)
-                        else:
-                            vals = thread_state.get("values", {}) or {}
-                            if key in vals:
-                                tool_data[key] = vals.get(key)
-                    if tool_data:
-                        try:
-                            logging.info(
-                                f"Found tool-related data for msg_id={msg_id} "
-                                f"(truncated 8k): {json.dumps(tool_data, default=str)[:8192]}"
-                            )
-                        except Exception:
-                            logging.info(
-                                f"Found tool-related data for msg_id={msg_id} (non-serializable)"
-                            )
-                except Exception as e:
-                    logging.debug(f"Error while inspecting tool data for msg_id={msg_id}: {e}")
+                values = thread_state.get("values", {})
+                requires_human_review = values.get(
+                    "requires_human_review", False
+                )
+                action_taken = values.get("action_taken")
+                action_str = str(action_taken).lower() if action_taken else ""
+
+                # Unified Option C for human-resolved path as well
+                if (
+                    requires_human_review
+                    or "denied" in action_str
+                    or "ignore" in action_str
+                ):
+                    logging.info(
+                        f"IGNORED/DENIED by supervisor for msg_id={msg_id}. "
+                        f"Freezing as action_denied (no reply, stays unread)."
+                    )
+                    set_message_status(
+                        msg_id,
+                        gmail_thread_id=gmail_thread_id,
+                        langgraph_thread_id=lg_thread_id,
+                        status="action_denied",
+                        last_run_id=rec.get("last_run_id"),
+                    )
+                    continue
 
                 gmail_msg = get_full_message(service, msg_id)
                 email_meta = parse_message_metadata(gmail_msg)
 
-                reply_text = extract_reply_from_thread_state(thread_state)
-                if not reply_text:
+                reply_text = values.get("email_reply")
+                if not isinstance(reply_text, str) or not reply_text.strip():
                     logging.warning(
-                        f"Resolved thread but no reply text for msg_id={msg_id}"
+                        f"Resolved thread but no email_reply for msg_id={msg_id}"
                     )
                     continue
+
+                reply_text = reply_text.strip()
 
                 success = send_reply(
                     service,
@@ -884,7 +852,8 @@ async def human_resolution_monitor(service):
                         last_run_id=rec.get("last_run_id"),
                     )
                     logging.info(
-                        f"Human-resolved reply sent and message marked read for msg_id={msg_id}"
+                        f"Human-resolved reply sent and message marked read "
+                        f"for msg_id={msg_id}"
                     )
 
         except Exception as e:
@@ -893,16 +862,12 @@ async def human_resolution_monitor(service):
         await asyncio.sleep(HUMAN_MONITOR_INTERVAL)
 
 
-# =====================================================================
 # MAIN
-# =====================================================================
-
 async def main():
     service = get_gmail_service()
-    logging.info("Gmail + LangGraph ambient agent starting up...")
+    logging.info("Gmail + LangGraph ambient agent (push-based) starting up...")
 
     await asyncio.gather(
-        gmail_poller(service),       # publisher
         email_worker(service),       # subscriber
         human_resolution_monitor(service),
     )

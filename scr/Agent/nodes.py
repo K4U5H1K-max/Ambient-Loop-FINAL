@@ -594,7 +594,7 @@ def resolve_issue(state: SupportAgentState):
         f"   - If correct item is out of stock, initiate a refund using initialize_refund_tool\n"
         f"5. For any other issues: Apply the relevant policy\n\n"
         f"IMPORTANT: After completing your investigation, you MUST format your final response as a professional customer support email using this exact structure:\n\n"
-        f"Resolution Summary:\n"
+        # f"Resolution Summary:\n"
         f"Dear [Customer Name],\n\n"
         f"Thank you for reaching out to us. We appreciate you contacting [Company Name].\n\n"
         f"I understand that you are experiencing [briefly describe their issue], and after carefully reviewing your situation, "

@@ -22,6 +22,8 @@ class SupportAgentState(BaseModel):
     policy_reason: str = ""
     action_taken: str = ""
     reason: str = ""
+    email_reply: Optional[str] = None
+
     # Capture reasoning at each step
     reasoning: Dict[str, str] = {}
     # Track agent's thought process
