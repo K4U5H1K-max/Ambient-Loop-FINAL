@@ -15,7 +15,15 @@ from dotenv import load_dotenv
 load_dotenv()
 from data.memory import get_policies_context, get_products_context
 import re
-from agent.prompts import CLASSIFICATION_PROMPT, TIER_CLASSIFIER_PROMPT, POLICY_SELECTION_PROMPT, ISSUE_CLASSIFIER_PROMPT, RESOLUTION_SUMMARY_PROMPT
+from agent.prompts import (
+    CLASSIFICATION_PROMPT,
+    TIER_CLASSIFIER_PROMPT,
+    POLICY_SELECTION_WITH_CANDIDATES,
+    POLICY_SELECTION_WITH_CONTEXT,
+    ISSUE_CLASSIFIER_PROMPT,
+    RESOLUTION_TASK_PROMPT,
+    RESOLUTION_TASK_AND_SUMMARY_PROMPT,
+)
 
 # Custom callback handler to capture agent reasoning
 class ReasoningCaptureHandler(BaseCallbackHandler):
@@ -303,18 +311,18 @@ def pick_policy(state: SupportAgentState):
     # Build a strict prompt that enumerates candidates (if available) and requires exact selection
     if allowed_names:
         candidates_block = "\n".join([f"{i+1}. {n} - {policy_map.get(n,'')}" for i, n in enumerate(allowed_names)])
-        instruction = POLICY_SELECTION_PROMPT.format(
+        instruction = POLICY_SELECTION_WITH_CANDIDATES.format(
             candidate_policies=candidates_block,
             customer_issue=issue_text,
             problem_types=problems_str,
-            issue_analysis=classification_reasoning
+            issue_analysis=classification_reasoning,
         )
     else:
-        instruction = POLICY_SELECTION_PROMPT.format(
-            candidate_policies="No specific policies found in context.",
+        instruction = POLICY_SELECTION_WITH_CONTEXT.format(
+            policy_context=policies_text,
             customer_issue=issue_text,
             problem_types=problems_str,
-            issue_analysis=classification_reasoning
+            issue_analysis=classification_reasoning,
         )
 
     structured_llm = llm.with_structured_output(PolicySelection)
@@ -426,53 +434,14 @@ def resolve_issue(state: SupportAgentState):
         #     }]
         # }
 
-    # Create task description
-    task = (
-        f"You are a customer support agent handling the following issue:\n"
-        f"Customer issue: {issue_text}\n"
-        f"Identified problem types: {problems_str}\n"
-        f"Company policy: {policy_info}\n\n"
-        f"Product Memory Context (from store):\n{products_context}\n\n"
-        f"Query/Issue Classification: {query_issue_flag}\n\n"
-        f"Has Order ID: {state.has_order_id}\n\n"
-        f"Instructions:\n"
-        f"1. Extract order ID (format: ORD#####) only if has_order_id is True.\n"
-        f"2. Use tools as needed. Do not fabricate data not shown.\n"
-        f"3. Choose resend vs refund based strictly on stock availability and policy guidance.\n"
-        f"4. Keep reasoning concise but stepwise.\n"
-        f"5. If product not found in context, still proceed using tools to validate.\n\n"
-        f"Follow these guidelines:\n"
-        f"1. First, extract the order ID from the customer issue (format: ORD#####)\n"
-        f"2. For non-delivery issues:\n"
-        f"   - Check order status using check_order_status_tool\n"
-        f"   - Check tracking information using track_order_tool\n"
-        f"3. For damaged or defective product issues:\n"
-        f"   - Identify the product from the customer's message\n"
-        f"   - Check stock availability using check_stock_tool\n"
-        f"   - If stock is available, initiate a resend using initialize_resend_tool\n"
-        f"   - If stock is not available (level 0), initiate a refund using initialize_refund_tool\n"
-        f"4. For wrong item issues:\n"
-        f"   - Identify both the incorrect item received and the correct item ordered\n"
-        f"   - Check stock of correct item using check_stock_tool\n"
-        f"   - If correct item is in stock, initiate a resend using initialize_resend_tool\n"
-        f"   - If correct item is out of stock, initiate a refund using initialize_refund_tool\n"
-        f"5. For any other issues: Apply the relevant policy\n\n"
-        f"IMPORTANT: After completing your investigation, you MUST format your final response as a professional customer support email using this exact structure:\n\n"
-        # f"Resolution Summary:\n"
-        f"Dear [Customer Name],\n\n"
-        f"Thank you for reaching out to us. We appreciate you contacting [Company Name].\n\n"
-        f"I understand that you are experiencing [briefly describe their issue], and after carefully reviewing your situation, "
-        f"we have identified [what was found] and determined the appropriate resolution. We will be [action being taken] "
-        f"to resolve this for you as quickly as possible.\n\n"
-        f"[Include specific details: order number, timeline, next steps, tracking info if applicable]\n\n"
-        f"Our current estimate for resolving this is [timeframe]. We will notify you immediately if anything changes.\n\n"
-        f"If you have any further questions or need additional assistance, please feel free to reply directly to this email. "
-        f"Our support team is always happy to help.\n\n"
-        f"Thank you for your patience and for choosing [Company Name].\n\n"
-        f"Kind regards,\n"
-        f"Customer Support Team\n"
-        f"[Company Name]\n\n"
-        f"Use the available tools to investigate and resolve this issue. After tool execution, generate the professional customer email."
+    # Create task description using centralized prompt
+    task = RESOLUTION_TASK_PROMPT.format(
+        issue_text=issue_text,
+        problems_str=problems_str,
+        policy_info=policy_info,
+        products_context=products_context,
+        query_issue_flag=query_issue_flag,
+        has_order_id=state.has_order_id,
     )
     
     # Use LLM with tools directly (compatible approach)
@@ -602,9 +571,9 @@ def resolve_issue(state: SupportAgentState):
         result_text = response.content
     else:
         # Ask LLM to summarize based on tool results
-        summary_prompt = RESOLUTION_SUMMARY_PROMPT.format(
+        summary_prompt = RESOLUTION_TASK_AND_SUMMARY_PROMPT.format(
             task=task,
-            tool_results=detailed_reasoning
+            detailed_reasoning=detailed_reasoning,
         )
         final_response = llm.invoke([HumanMessage(content=summary_prompt)])
         result_text = final_response.content
