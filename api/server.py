@@ -4,7 +4,7 @@ FastAPI server for Customer Support Agent + Gmail Pub/Sub Push Integration
 Flow:
 Gmail WATCH ---> Pub/Sub Topic ---> Subscription (PUSH) ---> /gmail/push
 /gmail/push ---> process_gmail_history() ---> internal queue
-email_worker + human_resolution_monitor run as background workers
+email_worker processes emails, graph calls /send-reply when done
 """
 
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
@@ -14,9 +14,15 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 import uvicorn
 import asyncio
+import os
+import subprocess
+from dotenv import load_dotenv
 
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Graph components (for manual ticket creation)
 from agent.graph import graph_app
@@ -34,20 +40,107 @@ from data.ticket_db import get_db, save_ticket_state, Ticket, TicketState, Sessi
 async def lifespan(app: FastAPI):
     """
     On startup:
-      - Launch Gmail push workers (email_worker + human_resolution_monitor)
+      - Launch Gmail push worker (email_worker)
+      - Start ngrok tunnel with static domain (if enabled)
+      - Set up Gmail Watch for Pub/Sub notifications
     """
-    from integration.mail_api import email_worker, human_resolution_monitor, get_gmail_service
+    from integration.mail_api import email_worker, get_gmail_service
 
     service = get_gmail_service()
+    
+    # Get and print authenticated Gmail account
+    try:
+        profile = service.users().getProfile(userId='me').execute()
+        gmail_email = profile.get('emailAddress', 'Unknown')
+        print(f"📧 Authenticated Gmail account: {gmail_email}")
+    except Exception as e:
+        print(f"⚠️  Could not get Gmail profile: {e}")
+        gmail_email = "Unknown"
+    
     loop = asyncio.get_event_loop()
 
     loop.create_task(email_worker(service))
-    loop.create_task(human_resolution_monitor(service))
+    # Note: human_resolution_monitor removed - graph now calls /send-reply directly
+
+    # Set up Gmail Watch for Pub/Sub
+    gmail_topic = os.getenv("GMAIL_PUBSUB_TOPIC")
+    if gmail_topic:
+        try:
+            print(f"📧 Setting up Gmail Watch for topic: {gmail_topic}")
+            print(f"   Using Gmail account: {gmail_email}")
+            request = {
+                'topicName': gmail_topic,
+                'labelIds': ['INBOX'],
+            }
+            watch_response = service.users().watch(userId='me', body=request).execute()
+            history_id = watch_response.get('historyId')
+            expiration_ms = watch_response.get('expiration')
+            
+            if expiration_ms:
+                expiration_dt = datetime.fromtimestamp(int(expiration_ms) / 1000)
+                days_until_expiry = (expiration_dt - datetime.now()).days
+                print(f"✅ Gmail Watch active! History ID: {history_id}")
+                print(f"   Expires in: {days_until_expiry} days ({expiration_dt.strftime('%Y-%m-%d %H:%M:%S')})")
+            else:
+                print(f"✅ Gmail Watch active! History ID: {history_id}")
+        except Exception as e:
+            print(f"⚠️  Warning: Could not set up Gmail Watch: {e}")
+            print("   Server will run but Gmail notifications may not work.")
+            print("   Make sure GMAIL_PUBSUB_TOPIC is set correctly in .env")
+    else:
+        print("⚠️  GMAIL_PUBSUB_TOPIC not set in .env - Gmail Watch not configured")
+        print("   Add GMAIL_PUBSUB_TOPIC=projects/YOUR_PROJECT/topics/YOUR_TOPIC to .env")
+
+    # Start ngrok only if domain is configured in .env
+    ngrok_domain = os.getenv("NGROK_DOMAIN")
+    ngrok_process = None
+    
+    # Only start ngrok if domain is provided and not explicitly disabled
+    if ngrok_domain and os.getenv("NGROK_ENABLED", "true").lower() != "false":
+        try:
+            print(f"🌐 Starting ngrok tunnel with domain: {ngrok_domain}")
+            ngrok_process = subprocess.Popen(
+                ["ngrok", "http", "8000", "--domain", ngrok_domain],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            # Wait for ngrok to initialize
+            await asyncio.sleep(3)
+            
+            ngrok_url = f"https://{ngrok_domain}"
+            print(f"✅ ngrok tunnel active!")
+            print(f"📍 Local: http://localhost:8000")
+            print(f"🌐 Public: {ngrok_url}")
+            print(f"📧 Pub/Sub endpoint: {ngrok_url}/gmail/push")
+            print(f"📋 Update your Pub/Sub subscription endpoint to: {ngrok_url}/gmail/push")
+        except FileNotFoundError:
+            print("⚠️  ngrok not found. Install it: brew install ngrok")
+            print("   Running locally without ngrok tunnel")
+        except Exception as e:
+            print(f"⚠️  Error starting ngrok: {e}")
+            print(f"   Running locally without ngrok tunnel")
+    else:
+        if not ngrok_domain:
+            print("📍 Running locally: http://localhost:8000")
+            print("   (No NGROK_DOMAIN set in .env - ngrok disabled)")
+        else:
+            print("📍 Running locally: http://localhost:8000")
+            print("   (NGROK_ENABLED=false - ngrok disabled)")
 
     print("🚀 Gmail Pub/Sub Push workers started.")
 
     yield
 
+    # Cleanup: Stop ngrok when server shuts down
+    if ngrok_process:
+        print("🛑 Stopping ngrok tunnel...")
+        ngrok_process.terminate()
+        try:
+            ngrok_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            ngrok_process.kill()
+    
     print("🛑 Server shutting down...")
 
 
@@ -111,6 +204,74 @@ async def gmail_push(request: Request):
     asyncio.create_task(process_gmail_history(service, str(history_id)))
 
     return {"status": "queued"}
+
+
+# ---------------------------------------------------------------------------
+# Graph Callback Endpoint - Called when graph finishes processing
+# ---------------------------------------------------------------------------
+class SendReplyRequest(BaseModel):
+    gmail_msg_id: str
+    gmail_thread_id: str
+    sender_email: str
+    email_subject: str
+    email_reply: str
+    action_taken: Optional[str] = None
+    tier_level: Optional[str] = None
+
+
+@app.post("/send-reply")
+async def send_reply_endpoint(data: SendReplyRequest):
+    """
+    Callback endpoint called by the graph when email reply is ready.
+    Sends Gmail reply and marks message as read.
+    """
+    from integration.mail_api import (
+        get_gmail_service, 
+        send_reply, 
+        mark_message_as_read,
+        set_message_status,
+        get_full_message,
+        parse_message_metadata
+    )
+    
+    try:
+        service = get_gmail_service()
+        
+        # Get original message for reply headers
+        gmail_msg = get_full_message(service, data.gmail_msg_id)
+        email_meta = parse_message_metadata(gmail_msg)
+        
+        # Send the reply
+        success = send_reply(
+            service,
+            to_addr=data.sender_email,
+            subject=data.email_subject,
+            reply_text=data.email_reply,
+            gmail_thread_id=data.gmail_thread_id,
+            in_reply_to=email_meta.get("message_id_header"),
+        )
+        
+        if success:
+            # Mark original message as read
+            mark_message_as_read(service, data.gmail_msg_id)
+            
+            # Update status in state.json
+            set_message_status(
+                data.gmail_msg_id,
+                gmail_thread_id=data.gmail_thread_id,
+                langgraph_thread_id=data.gmail_thread_id,  # Use gmail_thread_id as reference
+                status="completed",
+            )
+            
+            print(f"✅ Reply sent for msg_id={data.gmail_msg_id}, tier={data.tier_level}")
+            return {"status": "sent", "msg_id": data.gmail_msg_id}
+        else:
+            print(f"❌ Failed to send reply for msg_id={data.gmail_msg_id}")
+            return {"status": "failed", "msg_id": data.gmail_msg_id}
+            
+    except Exception as e:
+        print(f"❌ Error in send_reply_endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -273,4 +434,4 @@ async def list_tickets(db: Session = Depends(get_db)):
 # Run Server
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    uvicorn.run("api_server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api.server:app", host="0.0.0.0", port=8000, reload=True)

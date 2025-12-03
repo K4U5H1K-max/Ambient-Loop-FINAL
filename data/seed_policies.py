@@ -1,9 +1,14 @@
 """
 Seed PostgreSQL database with policies defined in policies.py
 """
+import site
+from pathlib import Path
+
+site.addsitedir(str(Path(__file__).parent.parent))
+
 from data.ticket_db import Policy
 from data.ticket_db import get_session
-from policies import get_all_policies
+from data.policies import get_all_policies
 
 def seed_policies_from_py():
     session = get_session()

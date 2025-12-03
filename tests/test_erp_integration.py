@@ -1,4 +1,9 @@
 """Test script for the ERP simulator integration with the customer support tools."""
+import site
+from pathlib import Path
+
+site.addsitedir(str(Path(__file__).parent.parent))
+
 import json
 from data.service import ERPService
 from agent.tools import (

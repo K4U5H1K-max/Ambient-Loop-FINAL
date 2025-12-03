@@ -1,0 +1,271 @@
+{
+  "seen_messages": {
+    "19ae26bdab97f331": {
+      "gmail_thread_id": "19ae26bdab97f331",
+      "langgraph_thread_id": "gmail-19ae26bdab97f331",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T04:15:14.054537"
+    },
+    "19ae27753317cdc7": {
+      "gmail_thread_id": "19ae27753317cdc7",
+      "langgraph_thread_id": "0550c955-0e01-438e-9e79-2f92c7ce1898",
+      "status": "awaiting_human",
+      "last_run_id": "019ae277-5bff-7727-bea8-6aa294094b29",
+      "updated_at": "2025-12-03T04:27:51.885084"
+    },
+    "19ae27ed260f6ac4": {
+      "gmail_thread_id": "19ae27ed260f6ac4",
+      "langgraph_thread_id": "170694ed-63f3-4598-ae88-8f5c6626b9d9",
+      "status": "awaiting_human",
+      "last_run_id": "019ae27e-dc26-7680-989a-ac2c5438b7eb",
+      "updated_at": "2025-12-03T04:36:00.831748"
+    },
+    "19ae29fb1534a978": {
+      "gmail_thread_id": "19ae29fb1534a978",
+      "langgraph_thread_id": "988ca6d0-9cb2-4d7e-8ab1-0abe55d800d9",
+      "status": "awaiting_human",
+      "last_run_id": "019ae29f-bbc7-74a6-8ef3-415f23c5cc0d",
+      "updated_at": "2025-12-03T05:11:59.867576"
+    },
+    "19ae524f60cbd691": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "5872283b-0cb3-404b-aa55-978959a3f8ec",
+      "status": "completed",
+      "last_run_id": "019ae525-0193-70c0-a681-5a0600c58c35",
+      "updated_at": "2025-12-03T16:56:59.834113"
+    },
+    "19ae5254c135209d": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "cc71bd3f-3f42-4db1-95d2-ad4846c48e59",
+      "status": "awaiting_human",
+      "last_run_id": "019ae525-590e-74f0-87c9-123d1747bb0d",
+      "updated_at": "2025-12-03T16:57:15.953970"
+    },
+    "19ae5255007e4b6b": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "2a976bdf-4e87-4a00-9ca1-2606a7aa9f89",
+      "status": "completed",
+      "last_run_id": "019ae525-5919-70b5-8e07-163d04263cf6",
+      "updated_at": "2025-12-03T16:57:22.457441"
+    },
+    "19ae525a687b0d06": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "febf1411-e36a-47cc-bf10-fab4ed7a4730",
+      "status": "completed",
+      "last_run_id": "019ae525-af88-77e3-90eb-a433c2a6724f",
+      "updated_at": "2025-12-03T16:57:50.570357"
+    },
+    "19ae525a89519a40": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "22e6b060-6de5-470f-a6dc-09155f2b7694",
+      "status": "completed",
+      "last_run_id": "019ae525-af8e-775a-abfb-4b91925bf62a",
+      "updated_at": "2025-12-03T16:57:49.672765"
+    },
+    "19ae525f9bc31612": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "19ae524f60cbd691",
+      "status": "completed",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:13.070188"
+    },
+    "19ae525fdb087333": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "19ae524f60cbd691",
+      "status": "completed",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:46.002106"
+    },
+    "19ae525fe273d975": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "19ae524f60cbd691",
+      "status": "completed",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:47.141862"
+    },
+    "19ae5260d00ae8fb": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "19ae524f60cbd691",
+      "status": "completed",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:18.078473"
+    },
+    "19ae5261317e8ec9": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "19ae524f60cbd691",
+      "status": "completed",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:43.549146"
+    },
+    "19ae5261749be2ef": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "19ae524f60cbd691",
+      "status": "completed",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:44.983906"
+    },
+    "19ae52666e5603fd": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae52666e5603fd",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:14.027887"
+    },
+    "19ae5266b65dadd6": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae5266b65dadd6",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:00:33.168941"
+    },
+    "19ae5266f36f8adb": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae5266f36f8adb",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:00:33.193612"
+    },
+    "19ae526775a1f559": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae526775a1f559",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:00:48.517178"
+    },
+    "19ae5267b14cb1d9": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae5267b14cb1d9",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:00:48.573530"
+    },
+    "19ae5267ff1b9da4": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae5267ff1b9da4",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:01:57.912061"
+    },
+    "19ae526820dfe96c": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae526820dfe96c",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:01:57.916031"
+    },
+    "19ae52686b0f5e90": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae52686b0f5e90",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:01:57.922998"
+    },
+    "19ae5268b5c95e05": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae5268b5c95e05",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:01:57.944764"
+    },
+    "19ae5268e07c3895": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae5268e07c3895",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:02:21.342098"
+    },
+    "19ae52695796cfee": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae52695796cfee",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:02:21.393676"
+    },
+    "19ae52696aadf454": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae52696aadf454",
+      "status": "processing",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:00:33.164992"
+    },
+    "19ae526e60e30a46": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae526e60e30a46",
+      "status": "pending",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:47.975316"
+    },
+    "19ae526eb3977f66": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae526eb3977f66",
+      "status": "pending",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:48.189744"
+    },
+    "19ae526ee8eb1485": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae526ee8eb1485",
+      "status": "pending",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:48.389480"
+    },
+    "19ae526f200471a1": {
+      "gmail_thread_id": "19ae524f60cbd691",
+      "langgraph_thread_id": "gmail-19ae526f200471a1",
+      "status": "pending",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T16:58:48.591618"
+    },
+    "19ae5411866f99e5": {
+      "gmail_thread_id": "19ae5411866f99e5",
+      "langgraph_thread_id": "2b990016-4209-4100-8726-e75158113bb3",
+      "status": "completed",
+      "last_run_id": "019ae541-23ad-728f-90ef-6113eb8c0511",
+      "updated_at": "2025-12-03T17:27:41.858659"
+    },
+    "19ae541691bdadee": {
+      "gmail_thread_id": "19ae5411866f99e5",
+      "langgraph_thread_id": "gmail-19ae541691bdadee",
+      "status": "pending",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:27:42.316377"
+    },
+    "19ae5416d30a5c1b": {
+      "gmail_thread_id": "19ae5411866f99e5",
+      "langgraph_thread_id": "gmail-19ae5416d30a5c1b",
+      "status": "pending",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:27:42.534946"
+    },
+    "19ae544a1c3e47e8": {
+      "gmail_thread_id": "19ae544a1c3e47e8",
+      "langgraph_thread_id": "19ae544a1c3e47e8",
+      "status": "completed",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:36:51.325955"
+    },
+    "19ae549cf5e2962d": {
+      "gmail_thread_id": "19ae544a1c3e47e8",
+      "langgraph_thread_id": "gmail-19ae549cf5e2962d",
+      "status": "pending",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:36:52.443337"
+    },
+    "19ae54de4a0ef135": {
+      "gmail_thread_id": "19ae54de4a0ef135",
+      "langgraph_thread_id": "19ae54de4a0ef135",
+      "status": "completed",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:43:33.837624"
+    },
+    "19ae54ff277e664e": {
+      "gmail_thread_id": "19ae54de4a0ef135",
+      "langgraph_thread_id": "gmail-19ae54ff277e664e",
+      "status": "pending",
+      "last_run_id": null,
+      "updated_at": "2025-12-03T17:43:49.198233"
+    }
+  },
+  "last_history_id": "3711"
+}

@@ -1,6 +1,11 @@
 """
 Initialize the PostgreSQL database tables for the support ticket system
 """
+import site
+from pathlib import Path
+
+site.addsitedir(str(Path(__file__).parent.parent))
+
 from data.ticket_db import create_tables, SessionLocal
 from data.seed_policies import seed_policies_from_py
 from data.seed_products import seed_products

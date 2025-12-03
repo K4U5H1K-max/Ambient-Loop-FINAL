@@ -55,8 +55,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
 ]
 
-# How often to check for human-resolved threads (seconds)
-HUMAN_MONITOR_INTERVAL = int(os.getenv("HUMAN_MONITOR_INTERVAL", "20"))
+# Note: HUMAN_MONITOR_INTERVAL removed - graph now calls /send-reply directly via callback
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,6 +67,23 @@ client = get_client(url=LANGGRAPH_URL)
 
 # Pub/sub queue: producer = process_gmail_history (push), consumer = email_worker
 incoming_email_queue: asyncio.Queue = asyncio.Queue()
+
+# Cache for authenticated Gmail address (to skip self-sent emails)
+_authenticated_email: Optional[str] = None
+
+
+def get_authenticated_email(service) -> str:
+    """Get and cache the authenticated Gmail account email address."""
+    global _authenticated_email
+    if _authenticated_email is None:
+        try:
+            profile = service.users().getProfile(userId='me').execute()
+            _authenticated_email = profile.get('emailAddress', '').lower()
+            logging.info(f"Cached authenticated email: {_authenticated_email}")
+        except Exception as e:
+            logging.warning(f"Could not get authenticated email: {e}")
+            _authenticated_email = ''
+    return _authenticated_email
 
 
 # =====================================================================
@@ -389,9 +405,14 @@ async def ensure_langgraph_thread(
         raise
 
 
-def build_run_input_from_email(email_meta: Dict[str, Any]) -> Dict[str, Any]:
+def build_run_input_from_email(
+    email_meta: Dict[str, Any],
+    gmail_msg_id: Optional[str] = None,
+    gmail_thread_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Convert Gmail metadata into the graph's expected input.
+    Includes callback URL for direct reply sending.
     """
     from_addr = email_meta["from"]
     subject = email_meta["subject"]
@@ -404,6 +425,9 @@ def build_run_input_from_email(email_meta: Dict[str, Any]) -> Dict[str, Any]:
         f"Body:\n{body}"
     )
 
+    # Callback URL for graph to POST when reply is ready
+    callback_url = os.getenv("FASTAPI_CALLBACK_URL", "http://localhost:8000/send-reply")
+
     return {
         "messages": [
             {
@@ -414,6 +438,11 @@ def build_run_input_from_email(email_meta: Dict[str, Any]) -> Dict[str, Any]:
         "email_from": from_addr,
         "email_subject": subject,
         "email_body": body,
+        # Email metadata for callback
+        "gmail_msg_id": gmail_msg_id,
+        "gmail_thread_id": gmail_thread_id,
+        "sender_email": from_addr,
+        "callback_url": callback_url,
     }
 
 
@@ -544,11 +573,10 @@ async def process_email_event(event: Dict[str, Any], service):
     # -----------------------------------------------------------------
     # SKIP SELF-SENT EMAILS (Prevents re-processing our own replies)
     # -----------------------------------------------------------------
-    SELF_SENDERS = {
-        "narasimha112503@gmail.com",
-    }
-    sender = (email_meta.get("from") or "").strip()
-    if any(s in sender for s in SELF_SENDERS):
+    authenticated_email = get_authenticated_email(service)
+    sender = (email_meta.get("from") or "").strip().lower()
+    
+    if authenticated_email and authenticated_email in sender:
         logging.info(
             f"[SKIP] Ignoring self-sent email msg_id={msg_id} from {sender}"
         )
@@ -604,7 +632,11 @@ async def process_email_event(event: Dict[str, Any], service):
                 last_run_id=None,
             )
 
-        run_input = build_run_input_from_email(email_meta)
+        run_input = build_run_input_from_email(
+            email_meta,
+            gmail_msg_id=msg_id,
+            gmail_thread_id=gmail_thread_id,
+        )
 
         interrupt_detected = False
         last_run_id = None
@@ -750,116 +782,9 @@ async def email_worker(service):
         await asyncio.sleep(0)
 
 
-async def human_resolution_monitor(service):
-    """
-    Background worker:
-
-    - Scans all messages with status 'awaiting_human'.
-    - For each, checks LangGraph thread_state.
-    - Once human has accepted & run has completed:
-        - Uses values['email_reply'] as final reply,
-        - Sends Gmail reply,
-        - Marks message as read,
-        - Marks status 'completed'.
-
-    If supervisor ignores/denies (tier classification or refund/resend):
-        - No reply is sent,
-        - Message stays UNREAD,
-        - Status becomes 'action_denied' (frozen).
-    """
-    logging.info("Starting human resolution monitor...")
-    while True:
-        try:
-            awaiting = iter_messages_by_status("awaiting_human")
-
-            for rec in awaiting:
-                msg_id = rec["msg_id"]
-                lg_thread_id = rec["langgraph_thread_id"]
-                gmail_thread_id = rec["gmail_thread_id"]
-
-                logging.info(
-                    f"Checking human resolution for msg_id={msg_id}, "
-                    f"thread={lg_thread_id}"
-                )
-
-                try:
-                    thread_state = await client.threads.get_state(
-                        thread_id=lg_thread_id
-                    )
-                except Exception as e:
-                    logging.error(
-                        f"Failed to get thread_state for {lg_thread_id}: {e}"
-                    )
-                    continue
-
-                if not thread_state_has_resolution(thread_state):
-                    continue
-
-                values = thread_state.get("values", {})
-                requires_human_review = values.get(
-                    "requires_human_review", False
-                )
-                action_taken = values.get("action_taken")
-                action_str = str(action_taken).lower() if action_taken else ""
-
-                # Unified Option C for human-resolved path as well
-                if (
-                    requires_human_review
-                    or "denied" in action_str
-                    or "ignore" in action_str
-                ):
-                    logging.info(
-                        f"IGNORED/DENIED by supervisor for msg_id={msg_id}. "
-                        f"Freezing as action_denied (no reply, stays unread)."
-                    )
-                    set_message_status(
-                        msg_id,
-                        gmail_thread_id=gmail_thread_id,
-                        langgraph_thread_id=lg_thread_id,
-                        status="action_denied",
-                        last_run_id=rec.get("last_run_id"),
-                    )
-                    continue
-
-                gmail_msg = get_full_message(service, msg_id)
-                email_meta = parse_message_metadata(gmail_msg)
-
-                reply_text = values.get("email_reply")
-                if not isinstance(reply_text, str) or not reply_text.strip():
-                    logging.warning(
-                        f"Resolved thread but no email_reply for msg_id={msg_id}"
-                    )
-                    continue
-
-                reply_text = reply_text.strip()
-
-                success = send_reply(
-                    service,
-                    to_addr=email_meta["from"],
-                    subject=email_meta["subject"],
-                    reply_text=reply_text,
-                    gmail_thread_id=gmail_thread_id,
-                    in_reply_to=email_meta["message_id_header"],
-                )
-
-                if success:
-                    mark_message_as_read(service, msg_id)
-                    set_message_status(
-                        msg_id,
-                        gmail_thread_id=gmail_thread_id,
-                        langgraph_thread_id=lg_thread_id,
-                        status="completed",
-                        last_run_id=rec.get("last_run_id"),
-                    )
-                    logging.info(
-                        f"Human-resolved reply sent and message marked read "
-                        f"for msg_id={msg_id}"
-                    )
-
-        except Exception as e:
-            logging.error(f"Human resolution monitor error: {e}")
-
-        await asyncio.sleep(HUMAN_MONITOR_INTERVAL)
+# NOTE: human_resolution_monitor has been removed.
+# The graph now calls /send-reply endpoint directly via callback when reply is ready.
+# For L3 interrupts, the graph will call the callback after human approval in Agent Inbox.
 
 
 # MAIN
@@ -867,10 +792,8 @@ async def main():
     service = get_gmail_service()
     logging.info("Gmail + LangGraph ambient agent (push-based) starting up...")
 
-    await asyncio.gather(
-        email_worker(service),       # subscriber
-        human_resolution_monitor(service),
-    )
+    # Only email_worker needed - graph calls /send-reply directly via callback
+    await email_worker(service)
 
 
 if __name__ == "__main__":

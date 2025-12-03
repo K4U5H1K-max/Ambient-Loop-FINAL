@@ -2,6 +2,11 @@
 """
 Test script to verify that messages are being properly serialized and stored in the database.
 """
+import site
+from pathlib import Path
+
+site.addsitedir(str(Path(__file__).parent.parent))
+
 from agent.state import SupportAgentState
 from langchain_core.messages import HumanMessage, AIMessage
 from data.ticket_db import save_ticket_state, get_db, Ticket, TicketState

@@ -30,3 +30,10 @@ class SupportAgentState(BaseModel):
     thought_process: List[Dict[str, Any]] = []
     #Checking for Order ID
     has_order_id: bool = False
+    
+    # Email metadata for callback (set by mail_api before graph execution)
+    gmail_msg_id: Optional[str] = None
+    gmail_thread_id: Optional[str] = None
+    sender_email: Optional[str] = None
+    email_subject: Optional[str] = None
+    callback_url: Optional[str] = None

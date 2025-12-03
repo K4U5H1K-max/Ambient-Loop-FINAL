@@ -1,3 +1,8 @@
+import site
+from pathlib import Path
+
+site.addsitedir(str(Path(__file__).parent.parent))
+
 from data.ticket_db import Product
 from data.models import ProductCategory  # use enum from models.py
 from data.ticket_db import get_session

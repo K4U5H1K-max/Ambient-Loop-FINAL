@@ -7,6 +7,11 @@ Tests:
 - Read message is skipped
 - Send failure does not mark read
 """
+import site
+from pathlib import Path
+
+site.addsitedir(str(Path(__file__).parent.parent))
+
 import unittest
 from unittest.mock import Mock, patch, MagicMock
 from integration.mail_api import is_message_unread, mark_message_as_read, notify_agent
