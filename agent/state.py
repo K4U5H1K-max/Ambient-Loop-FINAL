@@ -8,7 +8,6 @@ class SupportAgentState(BaseModel):
     #add a issue classifier
     is_support_ticket: bool = False# default to false for support ticket it is going to be over written to true when classified in validation node
     order_id: Optional[str] = None
-    products_cache: Optional[str] = None  # Preloaded products context
     problems: List[str] = []
     #query issue classification
     query_issue: str = ""
@@ -29,7 +28,7 @@ class SupportAgentState(BaseModel):
     # Track agent's thought process
     thought_process: List[Dict[str, Any]] = []
     #Checking for Order ID
-    has_order_id: bool = False
+    has_valid_order_id: bool = False
     
     # Email metadata for callback (set by mail_api before graph execution)
     gmail_msg_id: Optional[str] = None

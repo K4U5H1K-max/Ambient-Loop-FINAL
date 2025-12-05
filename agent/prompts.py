@@ -1,11 +1,44 @@
 # Centralized system prompts for the customer support agent
 
 # Ticket validation/classification
-CLASSIFICATION_PROMPT = """Analyze this customer message and extract:
-1. Whether it's a support ticket (order issues, product problems, complaints, refunds, etc.)
-2. Whether an order ID is present (format: ORD##### where # is a digit)
-3. The exact order ID if present
-Respond with structured JSON."""
+CLASSIFICATION_PROMPT = """Analyze the following customer message and produce a structured JSON response.
+Your task has three parts:
+
+1. **Support Ticket Classification**  
+   Determine whether the message should be considered a "support ticket."  
+   A message qualifies as a support ticket if it includes ANY of the following:  
+   - Issues with an order (delays, missing items, wrong items, damaged items)  
+   - Requests related to refunds, replacements, returns, cancellations, or exchanges  
+   - Complaints, negative experiences, or reports of product defects  
+   - Billing, payment, or charge-related concerns  
+   - Delivery or shipping issues  
+   - Requests for help that require customer service intervention  
+   If the customer is only asking general questions (e.g., product inquiry, availability, recommendations), **do NOT** classify it as a support ticket.
+
+2. **Order ID Detection**  
+   Identify whether an order ID is explicitly present in the message.  
+   An order ID follows the strict format:  
+   - Starts with **"ORD"**  
+   - Followed by **exactly 5 digits**  
+   Example formats to detect: `ORD12345`, `ORD00001`  
+   If no valid ID matching this pattern appears, report `"order_id_present": false`.
+
+3. **Order ID Extraction**  
+   If an order ID is found, extract it *exactly as written* by the user.  
+   - Do not correct formatting.  
+   - Do not infer order IDs.  
+   - If multiple IDs are present, return the first one in reading order.
+
+Be strict, consistent, and accurate in classification and extraction.
+Produce a JSON object with the following fields:
+
+{{
+  "is_support_ticket": true/false,
+  "order_id_present": true/false,
+  "order_id": "string or None"
+}}
+User message: {user_message}
+"""
 
 # Tier classification prompt
 TIER_CLASSIFIER_PROMPT = """# Customer Support Tier Classification System Prompt
@@ -163,9 +196,9 @@ RESOLUTION_TASK_PROMPT = (
    "Company policy: {policy_info}\n\n"
    "Product Memory Context (from store):\n{products_context}\n\n"
    "Query/Issue Classification: {query_issue_flag}\n\n"
-   "Has Order ID: {has_order_id}\n\n"
+   "Has Order ID: {has_valid_order_id}\n\n"
    "Instructions:\n"
-   "1. Extract order ID (format: ORD#####) only if has_order_id is True.\n"
+   "1. Extract order ID (format: ORD#####) only if has_valid_order_id is True.\n"
    "2. Use tools as needed. Do not fabricate data not shown.\n"
    "3. Choose resend vs refund based strictly on stock availability and policy guidance.\n"
    "4. Keep reasoning concise but stepwise.\n"

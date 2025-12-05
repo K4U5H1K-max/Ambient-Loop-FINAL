@@ -25,27 +25,6 @@ from agent.prompts import (
     RESOLUTION_TASK_AND_SUMMARY_PROMPT,
 )
 
-# Custom callback handler to capture agent reasoning
-class ReasoningCaptureHandler(BaseCallbackHandler):
-    def __init__(self):
-        self.reasoning_steps = []
-        self.current_step = {}
-    
-    def on_agent_action(self, action, **kwargs):
-        self.current_step = {
-            "action": action.tool,
-            "action_input": action.tool_input,
-            "thought": action.log
-        }
-        self.reasoning_steps.append(self.current_step)
-        
-    def on_tool_end(self, output, **kwargs):
-        if self.current_step:
-            self.current_step["tool_output"] = output
-            
-    def get_reasoning(self):
-        return self.reasoning_steps
-
 # Define Pydantic models for structured outputs
 class IssueClassification(BaseModel):
     problem_types: List[str] = Field(description="List of identified problem types")
@@ -60,7 +39,7 @@ class PolicySelection(BaseModel):
 # Add this near the top with other Pydantic models
 class TicketValidation(BaseModel):
     is_support_ticket: bool = Field(description="Whether this is a customer support ticket")
-    has_order_id: bool = Field(description="Whether an order ID is present in the message")
+    has_valid_order_id: bool = Field(description="Whether a valid order ID is present in the message")
     extracted_order_id: Optional[str] = Field(description="The extracted order ID if present (format: ORD#####)", default=None)
 
 # Initialize LLM
@@ -92,7 +71,7 @@ def validate_and_load_context(state: SupportAgentState):
         return {"is_support_ticket": False}
     
     # Support ticket confirmed
-    if response.has_order_id and response.extracted_order_id:
+    if response.has_valid_order_id and response.extracted_order_id:
         order_id_upper = response.extracted_order_id.upper()
         
         # Validate order exists
@@ -102,26 +81,24 @@ def validate_and_load_context(state: SupportAgentState):
             print(f"Loaded products context: {len(products_context)} chars")
             return {
                 "is_support_ticket": True,
-                "has_order_id": True,
+                "has_valid_order_id": True,
                 "order_id": order_id_upper,
-                "products_cache": products_context
             }
         else:
             print(f"⚠️ Order ID {order_id_upper} not found in database")
             return {
                 "is_support_ticket": True,
-                "has_order_id": False,
+                "has_valid_order_id": False,
                 "order_id": None,
-                "products_cache": None
             }
     else:
         print("No order ID found in message")
         return {
             "is_support_ticket": True,
-            "has_order_id": False,
+            "has_valid_order_id": False,
             "order_id": None,
-            "products_cache": None
         }
+    
 def tier_classifier(state: SupportAgentState):
     issue_text = state.messages[0].content
     
@@ -202,11 +179,11 @@ def tier_classifier(state: SupportAgentState):
             approved = False
             status_msg = f"{tier_level} classification denied."
 
-        return {
-            "tier_level": tier_level,
-            "approved": approved,
-            "messages": [*state.messages, AIMessage(content=status_msg)]
-        }
+    return {
+        "tier_level": tier_level,
+        "approved": approved,
+        "messages": [*state.messages, AIMessage(content=status_msg)]
+    }
 
 
 
@@ -381,23 +358,12 @@ def pick_policy(state: SupportAgentState):
 
 def resolve_issue(state: SupportAgentState):
     # Create callback handler to capture reasoning
-    reasoning_handler = ReasoningCaptureHandler()
     issue_text = state.messages[0].content
     policy_info = f"{state.policy_name}: {state.policy_desc}"
     problems_str = ", ".join(state.problems)
-    
-    # Product ID mapping for reference
-    product_mapping = """
-    Product ID Reference:
-    - P1001: Premium Wireless Headphones ($199.99)
-    - P1002: Smart Fitness Watch ($149.99)
-    - P1003: Organic Cotton T-Shirt ($29.99)
-    - P1004: Stainless Steel Water Bottle ($34.99)
-    - P1005: Wireless Charging Pad ($39.99)
-    """
-    
+        
     # Use cached products context from validation node
-    products_context = state.products_cache or ""
+    products_context = get_products_context()
 
     # SHORT-CIRCUIT: if this is a general policy/query request (no actionable order),
     # do NOT call tools. Instead, return a policy-only informational email.
@@ -441,7 +407,7 @@ def resolve_issue(state: SupportAgentState):
         policy_info=policy_info,
         products_context=products_context,
         query_issue_flag=query_issue_flag,
-        has_order_id=state.has_order_id,
+        has_valid_order_id=state.has_valid_order_id,
     )
     
     # Use LLM with tools directly (compatible approach)

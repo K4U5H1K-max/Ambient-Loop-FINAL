@@ -18,7 +18,7 @@ from data.memory import (
 # Database session removed - seeding handled by init_db.py
 
 def route_after_validation(state: SupportAgentState):
-    return "tier_classification" if state.is_support_ticket and state.has_order_id else END
+    return "tier_classification" if state.is_support_ticket and state.has_valid_order_id else END
 
 workflow = StateGraph(SupportAgentState)
 
