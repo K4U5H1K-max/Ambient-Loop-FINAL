@@ -9,11 +9,11 @@ from langchain_core.tools import tool as create_tool
 import json
 from typing import Dict, Any, List, Optional
 from data.policies import format_policies_for_llm, get_policies_for_problem
-from data.data import ORDERS
+from data.memory import get_policies_context, get_products_context
+from erp.data import ORDERS
 from difflib import get_close_matches
 from dotenv import load_dotenv
 load_dotenv()
-from data.memory import get_policies_context, get_products_context
 import re
 from agent.prompts import (
     CLASSIFICATION_PROMPT,
@@ -178,6 +178,10 @@ def tier_classifier(state: SupportAgentState):
         else:
             approved = False
             status_msg = f"{tier_level} classification denied."
+    else:
+        # L1/L2 are auto-approved
+        approved = True
+        status_msg = f"{tier_level} classification automatically approved."
 
     return {
         "tier_level": tier_level,
@@ -563,24 +567,6 @@ def resolve_issue(state: SupportAgentState):
 
     # Format reasoning for frontend display
     formatted_reasoning = detailed_reasoning
-
-    # Send callback to FastAPI if callback_url is set
-    if state.callback_url and result_text:
-        try:
-            import requests
-            callback_data = {
-                "gmail_msg_id": state.gmail_msg_id,
-                "gmail_thread_id": state.gmail_thread_id,
-                "sender_email": state.sender_email,
-                "email_subject": state.email_subject,
-                "email_reply": result_text,
-                "action_taken": action,
-                "tier_level": state.tier_level,
-            }
-            requests.post(state.callback_url, json=callback_data, timeout=10)
-            print(f"✅ Callback sent to {state.callback_url}")
-        except Exception as e:
-            print(f"⚠️ Failed to send callback: {e}")
     
     return {
         "messages": [*state.messages, *tool_messages, resolution_message],

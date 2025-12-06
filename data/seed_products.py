@@ -3,10 +3,10 @@ from pathlib import Path
 
 site.addsitedir(str(Path(__file__).parent.parent))
 
-from data.ticket_db import Product
-from data.models import ProductCategory  # use enum from models.py
-from data.ticket_db import get_session
-from data.data import PRODUCTS
+from db import Product
+from db.session import get_session
+from erp.models import ProductCategory
+from erp.data import PRODUCTS
 
 def seed_products():
     """Populate the products table using entries from data.py."""

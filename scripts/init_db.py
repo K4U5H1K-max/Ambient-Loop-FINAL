@@ -1,28 +1,26 @@
 """
-Initialize the PostgreSQL database tables for the support ticket system
+Initialize the PostgreSQL database tables for the support ticket system.
 """
+import os
 import site
 from pathlib import Path
 
 site.addsitedir(str(Path(__file__).parent.parent))
 
-from data.ticket_db import create_tables, SessionLocal
+from dotenv import load_dotenv
+load_dotenv()
+
+from db import SessionLocal, create_tables
 from data.seed_policies import seed_policies_from_py
 from data.seed_products import seed_products
 from data.memory import get_policy_memory, get_product_memory, seed_policy_memory, seed_product_memory
 from langgraph.store.postgres import PostgresStore
-import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 STORE_URL = os.getenv("POSTGRES_URI") or os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/support_tickets")
 
+
 def main():
-    """
-    Create all database tables and seed data
-    """
+    """Create all database tables and seed data."""
     print("🔧 Step 1: Creating database tables...")
     create_tables()
     
@@ -53,7 +51,7 @@ def main():
         db.close()
     
     print("\n✅ Database initialization complete!")
-    print(f"Using database URL: {os.getenv('DATABASE_URL', 'Not set - using default')}")
+
 
 if __name__ == "__main__":
     main()

@@ -15,9 +15,10 @@ dependencies = [
     "pydantic>=2.4.0",
     "fastapi>=0.104.0",
     "uvicorn>=0.23.2",
-    "sqlalchemy>=2.0.0",
+    "sqlalchemy[asyncio]>=2.0.0",
     "psycopg2-binary>=2.9.9",
     "psycopg[binary]>=3.0.0",
+    "asyncpg>=0.29.0",
     "alembic>=1.12.0",
     "google-api-python-client==2.88.0",
     "google-auth-httplib2==0.1.0",
@@ -37,6 +38,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["agent", "api", "data", "integration", "config", "scripts", "tests"]
+packages = ["agent", "db", "erp", "data", "integration", "server", "scripts", "tests"]
+
 
 

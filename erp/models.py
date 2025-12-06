@@ -1,15 +1,9 @@
-"""
-ERP System Simulator Data Models
-"""
+"""ERP System Simulator Data Models."""
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 from typing import List, Dict, Optional
-import uuid
-import random
 
-# Current time reference
-NOW = datetime.now()
 
 class OrderStatus(Enum):
     PENDING = "pending"
@@ -19,6 +13,7 @@ class OrderStatus(Enum):
     RETURNED = "returned"
     CANCELLED = "cancelled"
 
+
 class ShipmentStatus(Enum):
     PROCESSING = "processing"
     IN_TRANSIT = "in_transit"
@@ -26,6 +21,7 @@ class ShipmentStatus(Enum):
     DELIVERED = "delivered"
     FAILED = "failed"
     RETURNED = "returned"
+
 
 class ProductCategory(Enum):
     ELECTRONICS = "electronics"
@@ -35,6 +31,7 @@ class ProductCategory(Enum):
     BOOKS = "books"
     BEAUTY = "beauty"
 
+
 @dataclass
 class Product:
     id: str
@@ -42,22 +39,24 @@ class Product:
     description: str
     price: float
     category: ProductCategory
-    weight: float  # in kg
-    dimensions: Dict[str, float]  # length, width, height in cm
+    weight: float
+    dimensions: Dict[str, float]
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+
 
 @dataclass
 class InventoryItem:
     product_id: str
     quantity: int
     warehouse_id: str
-    location: str  # Shelf/bin location
+    location: str
     last_restock_date: datetime
     reorder_threshold: int
     reorder_quantity: int
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+
 
 @dataclass
 class TrackingEvent:
@@ -65,6 +64,7 @@ class TrackingEvent:
     location: str
     status: ShipmentStatus
     description: str
+
 
 @dataclass
 class Shipment:
@@ -79,6 +79,7 @@ class Shipment:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
 
+
 @dataclass
 class OrderItem:
     product_id: str
@@ -87,6 +88,7 @@ class OrderItem:
     total_price: float
     is_returned: bool = False
     return_reason: Optional[str] = None
+
 
 @dataclass
 class Order:
@@ -103,6 +105,7 @@ class Order:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
 
+
 @dataclass
 class Customer:
     id: str
@@ -113,13 +116,14 @@ class Customer:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
 
+
 @dataclass
 class ReturnRequest:
     id: str
     order_id: str
     items: List[OrderItem]
     reason: str
-    status: str  # pending, approved, rejected, completed
+    status: str
     refund_amount: Optional[float] = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)

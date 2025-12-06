@@ -3,5 +3,8 @@
   "graphs": {
     "customer_support_agent": "./graph.py:graph_app"
   },
-  "env": "../.env"
+  "env": "../.env",
+  "http": {
+    "app": "./webapp.py:app"
+  }
 }

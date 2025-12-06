@@ -3,36 +3,34 @@ from pydantic import BaseModel
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
+
 class SupportAgentState(BaseModel):
     messages: Annotated[List[BaseMessage], add_messages] = []
-    #add a issue classifier
-    is_support_ticket: bool = False# default to false for support ticket it is going to be over written to true when classified in validation node
+    
+    # Ticket classification
+    is_support_ticket: bool = False
     order_id: Optional[str] = None
+    has_valid_order_id: bool = False
+    
+    # Issue classification
     problems: List[str] = []
-    #query issue classification
     query_issue: str = ""
-    #tier classification
+    
+    # Tier classification
     tier_level: str = ""
-    # L3 approval
     approved: Optional[bool] = None
-    #policy details
+    
+    # Policy details
     policy_name: str = ""
     policy_desc: str = ""
     policy_reason: str = ""
+    
+    # Resolution
     action_taken: str = ""
     reason: str = ""
     email_reply: Optional[str] = None
+    requires_human_review: bool = False
 
-    # Capture reasoning at each step
+    # Reasoning tracking
     reasoning: Dict[str, str] = {}
-    # Track agent's thought process
     thought_process: List[Dict[str, Any]] = []
-    #Checking for Order ID
-    has_valid_order_id: bool = False
-    
-    # Email metadata for callback (set by mail_api before graph execution)
-    gmail_msg_id: Optional[str] = None
-    gmail_thread_id: Optional[str] = None
-    sender_email: Optional[str] = None
-    email_subject: Optional[str] = None
-    callback_url: Optional[str] = None

@@ -6,8 +6,8 @@ from pathlib import Path
 
 site.addsitedir(str(Path(__file__).parent.parent))
 
-from data.ticket_db import Policy
-from data.ticket_db import get_session
+from db import Policy
+from db.session import get_session
 from data.policies import get_all_policies
 
 def seed_policies_from_py():

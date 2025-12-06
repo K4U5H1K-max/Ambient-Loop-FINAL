@@ -1,5 +1,6 @@
-from data.service import ERPService
+from erp.service import ERPService
 import json
+
 
 def check_order_status(order_id: str) -> str:
     """Check the status of an order by its order ID"""
@@ -47,7 +48,7 @@ def track_order(order_id: str) -> str:
 
 def check_stock(product_id: str) -> str:
     """Check the stock level of a product by its product ID or name"""
-    from data.data import PRODUCTS
+    from erp.data import PRODUCTS
     
     # If input looks like a product ID (P followed by digits), use it directly
     if product_id.startswith('P') and len(product_id) == 5 and product_id[1:].isdigit():
